@@ -1,0 +1,1374 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>라라로운 학생 생활지도 입력</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f1f5f9; }
+        .tab-active { border-bottom: 2px solid #1e3a8a; color: #1e3a8a; font-weight: 600; }
+        .tab-inactive { color: #64748b; font-weight: 400; }
+        .fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        /* 스크롤바 커스텀 */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        
+        /* 로딩 스피너 애니메이션 */
+        .loader {
+            border: 3px solid #f3f3f3; border-top: 3px solid #4f46e5;
+            border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="text-slate-800 antialiased h-screen flex flex-col overflow-hidden">
+
+    <!-- 서버 통신 로딩 오버레이 -->
+    <div id="loading-overlay" class="fixed inset-0 bg-slate-900 bg-opacity-30 z-[100] flex items-center justify-center hidden fade-in">
+        <div class="bg-white px-6 py-4 rounded-xl shadow-xl flex items-center gap-4">
+            <div class="loader"></div>
+            <span id="loading-msg" class="font-semibold text-slate-700">데이터 처리 중...</span>
+        </div>
+    </div>
+
+    <!-- 토스트 알림 메시지 -->
+    <div id="toast" class="fixed top-5 left-1/2 transform -translate-x-1/2 bg-slate-800 text-white px-6 py-3 rounded-lg shadow-lg z-50 hidden opacity-0 transition-opacity duration-300">
+        메시지
+    </div>
+
+    <!-- 커스텀 Confirm 모달 -->
+    <div id="confirm-modal" class="hidden fixed inset-0 bg-slate-900 bg-opacity-50 flex items-center justify-center z-[70] fade-in">
+        <div class="bg-white p-6 rounded-xl shadow-xl w-11/12 max-w-md">
+            <h3 id="confirm-msg" class="text-lg font-semibold mb-6 text-center text-slate-700 whitespace-pre-line leading-relaxed">확인하시겠습니까?</h3>
+            <div class="flex justify-center gap-3">
+                <button onclick="closeConfirm()" class="px-5 py-2.5 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition font-medium">취소</button>
+                <button id="confirm-btn" class="px-5 py-2.5 bg-indigo-700 text-white rounded-lg hover:bg-indigo-800 transition font-medium">확인</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 기록 수정 모달 -->
+    <div id="edit-modal" class="hidden fixed inset-0 bg-slate-900 bg-opacity-60 flex items-center justify-center z-[60] fade-in p-4">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
+            <div class="p-5 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-xl">
+                <h3 class="text-lg font-bold text-slate-800">지도 기록 수정</h3>
+                <button onclick="closeEditModal()" class="text-slate-400 hover:text-slate-600">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+            <div class="p-6 overflow-y-auto flex-1 space-y-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-500 mb-1">1차 분류</label>
+                        <select id="edit-cat1" onchange="updateEditCat2()" class="w-full border border-slate-300 rounded-lg shadow-sm py-2 px-3 focus:ring-2 focus:ring-indigo-200 outline-none bg-white text-sm"></select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-500 mb-1">2차 세부항목</label>
+                        <select id="edit-cat2" onchange="checkEditOther()" class="w-full border border-slate-300 rounded-lg shadow-sm py-2 px-3 focus:ring-2 focus:ring-indigo-200 outline-none bg-white text-sm"></select>
+                    </div>
+                </div>
+                <div id="edit-other-input-container" class="hidden">
+                    <label class="block text-sm font-medium text-slate-500 mb-1">기타 상세 사유</label>
+                    <input type="text" id="edit-cat-other" class="w-full border border-slate-300 rounded-lg shadow-sm py-2 px-3 focus:ring-2 focus:ring-indigo-200 outline-none bg-white text-sm">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-500 mb-1">지도 일시</label>
+                    <input type="date" id="edit-record-date" class="w-full sm:w-1/2 border border-slate-300 rounded-lg shadow-sm py-2 px-3 focus:ring-2 focus:ring-indigo-200 outline-none bg-white text-sm">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-500 mb-1">상세 지도 내용</label>
+                    <textarea id="edit-record-detail" rows="4" class="w-full border border-slate-300 rounded-lg shadow-sm py-2 px-3 focus:ring-2 focus:ring-indigo-200 outline-none bg-white text-sm resize-none"></textarea>
+                </div>
+                <div class="pt-4 flex gap-3">
+                    <button onclick="closeEditModal()" class="flex-1 py-3 bg-slate-100 text-slate-700 font-bold rounded-lg transition hover:bg-slate-200">취소</button>
+                    <button onclick="saveEditRecord()" class="flex-1 py-3 bg-indigo-600 text-white font-bold rounded-lg transition hover:bg-indigo-700">수정 내용 저장</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 기록 열람 모달 (학생 기록 상세 조회) -->
+    <div id="history-modal" class="hidden fixed inset-0 bg-slate-900 bg-opacity-50 flex items-center justify-center z-50 fade-in p-4">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <div class="p-5 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-xl">
+                <h3 class="text-xl font-bold text-slate-800" id="history-modal-title">학생 기록</h3>
+                <button onclick="closeHistoryModal()" class="text-slate-400 hover:text-slate-600">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+            <div class="p-5 overflow-y-auto flex-1" id="history-modal-content">
+                <!-- 기록 내용이 여기에 동적으로 삽입됨 -->
+            </div>
+        </div>
+    </div>
+
+    <!-- 앱 헤더 -->
+    <header class="bg-white text-slate-800 border-b border-slate-200 shadow-sm z-10 flex-shrink-0">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-2">
+                <div class="bg-indigo-600 p-1.5 rounded-lg">
+                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                </div>
+                <h1 class="text-lg font-bold tracking-tight">라라로운 생활지도</h1>
+            </div>
+            <div id="header-user-info" class="hidden flex items-center gap-3 text-sm font-medium">
+                <span id="header-welcome-text" class="text-indigo-700 flex items-center"></span>
+                <button id="btn-goto-admin" class="hidden px-3 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-md transition text-xs border border-slate-200 flex items-center gap-1">
+                    누적 현황 보기 
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                </button>
+                <button id="btn-goto-teacher" class="hidden px-3 py-1.5 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-md transition text-xs border border-slate-200 flex items-center gap-1">
+                    성찰카드 입력
+                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+                </button>
+                <button onclick="logout()" class="p-1.5 text-slate-400 hover:text-slate-600 transition" title="로그아웃">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- 메인 컨텐츠 영역 -->
+    <main class="flex-1 overflow-hidden relative bg-slate-50">
+        
+        <!-- 로그인/회원가입 화면 -->
+        <div id="login-screen" class="absolute inset-0 overflow-y-auto flex items-center justify-center p-4 bg-slate-50">
+            <div class="bg-white w-full max-w-md rounded-2xl shadow-xl overflow-hidden">
+                <div class="flex border-b border-slate-200">
+                    <button id="tab-login" onclick="switchAuthTab('login')" class="flex-1 py-4 text-center tab-active transition">교사 로그인</button>
+                    <button id="tab-register" onclick="switchAuthTab('register')" class="flex-1 py-4 text-center tab-inactive transition">신규 교사 등록</button>
+                </div>
+                
+                <div class="p-8">
+                    <!-- 로그인 폼 -->
+                    <div id="form-login" class="space-y-5 fade-in">
+                        <div>
+                            <label class="block text-sm font-semibold text-slate-700 mb-2">이름 입력</label>
+                            <input type="text" id="login-name" placeholder="실명을 입력하세요" class="w-full border-slate-300 rounded-lg shadow-sm py-2.5 px-3 focus:ring-indigo-500 focus:border-indigo-500 border outline-none bg-slate-50">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold text-slate-700 mb-2">PIN 번호 (4자리)</label>
+                            <input type="password" id="login-pin" maxlength="4" placeholder="••••" class="w-full border-slate-300 rounded-lg shadow-sm py-2.5 px-3 focus:ring-indigo-500 focus:border-indigo-500 border outline-none bg-slate-50 text-center tracking-[1em] font-bold">
+                        </div>
+                        <button onclick="handleLogin()" class="w-full py-3 bg-indigo-700 hover:bg-indigo-800 text-white font-bold rounded-lg shadow-md transition mt-2">교사 인증하기</button>
+                    </div>
+
+                    <!-- 회원가입 폼 -->
+                    <div id="form-register" class="space-y-5 hidden fade-in">
+                        <div>
+                            <label class="block text-sm font-semibold text-slate-700 mb-2">교사 이름</label>
+                            <input type="text" id="reg-name" placeholder="실명을 입력하세요" class="w-full border-slate-300 rounded-lg shadow-sm py-2.5 px-3 focus:ring-indigo-500 focus:border-indigo-500 border outline-none bg-slate-50">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-semibold text-slate-700 mb-2">PIN 번호 설정 (4자리 숫자)</label>
+                            <input type="password" id="reg-pin" maxlength="4" placeholder="••••" class="w-full border-slate-300 rounded-lg shadow-sm py-2.5 px-3 focus:ring-indigo-500 focus:border-indigo-500 border outline-none bg-slate-50 text-center tracking-[1em] font-bold">
+                        </div>
+                        <button onclick="handleRegister()" class="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-lg shadow-md transition mt-2">교사 등록하기</button>
+                        <p class="text-[11px] text-center text-slate-500 mt-2">* 교사 로그인 문의 - 안효은 선생님(0296)</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 교사 입력 화면 (앱 모드) -->
+        <div id="app-screen" class="hidden h-full flex flex-col max-w-4xl mx-auto w-full p-4 sm:p-8 overflow-y-auto space-y-6">
+            
+            <!-- 학생 선택 카드 -->
+            <div class="bg-white p-6 sm:p-8 rounded-2xl shadow-sm border border-slate-100">
+                <h2 class="font-bold text-lg text-indigo-900 flex items-center gap-2 mb-6">
+                    <svg class="w-5 h-5 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                    학생 선택 (1학년)
+                </h2>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-500 mb-2">반 선택</label>
+                        <select id="select-class" onchange="handleClassChange()" class="w-full border border-indigo-600 rounded-lg shadow-sm py-3 px-3 focus:ring-2 focus:ring-indigo-200 outline-none bg-white text-slate-700 text-sm appearance-none" style="background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%234F46E5%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E'); background-repeat: no-repeat; background-position: right 1rem top 50%; background-size: 0.65rem auto;">
+                            <option value="">반을 선택하세요 (1~8반)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-500 mb-2">학생 선택</label>
+                        <select id="select-student" onchange="handleStudentChange()" class="w-full border border-slate-200 rounded-lg shadow-sm py-3 px-3 focus:ring-2 focus:ring-indigo-200 outline-none bg-slate-50 text-slate-400 text-sm disabled:opacity-70 disabled:bg-slate-50 appearance-none" disabled style="background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%2394A3B8%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E'); background-repeat: no-repeat; background-position: right 1rem top 50%; background-size: 0.65rem auto;">
+                            <option value="">학생을 선택하세요</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div id="selected-student-summary" class="hidden mt-6 p-4 bg-indigo-50 rounded-xl border border-indigo-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 fade-in">
+                    <div class="flex items-center gap-3">
+                        <h3 class="text-xl font-bold text-indigo-900" id="selected-student-name">이름</h3>
+                        <span class="text-xs font-semibold bg-indigo-200 text-indigo-800 px-2.5 py-1 rounded-md tracking-wide" id="selected-student-info">10801</span>
+                    </div>
+                    <div class="bg-white px-4 py-2.5 rounded-lg shadow-sm border border-indigo-100 text-sm flex items-center gap-3">
+                        <div class="font-medium text-slate-600">누적 카드: <span id="selected-student-count" class="font-bold text-red-600 text-lg ml-1">0</span>회</div>
+                        <div class="w-px h-4 bg-slate-200"></div>
+                        <button onclick="showSelectedStudentHistory()" class="text-indigo-600 hover:text-indigo-800 font-bold text-sm flex items-center gap-1 transition">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                            기록 보기
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 지도 입력 폼 카드 -->
+            <div id="input-container" class="bg-white p-6 sm:p-8 rounded-2xl shadow-sm border border-slate-100 fade-in mb-8">
+                <h2 class="font-bold text-lg text-slate-400 flex items-center gap-2 mb-6">
+                    <svg class="w-5 h-5 text-indigo-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+                    성찰카드 발급 정보
+                </h2>
+                
+                <div class="space-y-6">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-400 mb-2">1차 분류 (영역)</label>
+                            <select id="cat1" onchange="updateCat2()" class="w-full border border-slate-100 rounded-lg shadow-sm py-3 px-3 focus:ring-2 focus:ring-indigo-200 outline-none bg-slate-50 text-slate-700 text-sm disabled:opacity-70 disabled:bg-slate-50 appearance-none" style="background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23CBD5E1%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E'); background-repeat: no-repeat; background-position: right 1rem top 50%; background-size: 0.65rem auto;" disabled>
+                                <option value="">영역 선택</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-slate-400 mb-2">2차 세부항목</label>
+                            <select id="cat2" onchange="checkOther()" class="w-full border border-slate-100 rounded-lg shadow-sm py-3 px-3 focus:ring-2 focus:ring-indigo-200 outline-none bg-slate-50 text-slate-700 text-sm disabled:opacity-70 disabled:bg-slate-50 appearance-none" style="background-image: url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22292.4%22%20height%3D%22292.4%22%3E%3Cpath%20fill%3D%22%23CBD5E1%22%20d%3D%22M287%2069.4a17.6%2017.6%200%200%200-13-5.4H18.4c-5%200-9.3%201.8-12.9%205.4A17.6%2017.6%200%200%200%200%2082.2c0%205%201.8%209.3%205.4%2012.9l128%20127.9c3.6%203.6%207.8%205.4%2012.8%205.4s9.2-1.8%2012.8-5.4L287%2095c3.5-3.5%205.4-7.8%205.4-12.8%200-5-1.9-9.2-5.5-12.8z%22%2F%3E%3C%2Fsvg%3E'); background-repeat: no-repeat; background-position: right 1rem top 50%; background-size: 0.65rem auto;" disabled>
+                                <option value="">세부항목 선택</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div id="other-input-container" class="hidden fade-in">
+                        <label class="block text-sm font-medium text-slate-500 mb-2">기타 상세 사유</label>
+                        <input type="text" id="cat-other" placeholder="구체적인 위반 내용을 입력하세요" class="w-full border border-slate-200 rounded-lg shadow-sm py-3 px-3 focus:ring-2 focus:ring-indigo-200 outline-none bg-white text-slate-700 text-sm">
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-slate-400 mb-2">지도 일시</label>
+                        <input type="date" id="record-date" class="w-full sm:w-1/2 border border-slate-100 rounded-lg shadow-sm py-3 px-3 focus:ring-2 focus:ring-indigo-200 outline-none bg-slate-50 text-slate-700 text-sm" disabled>
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium text-slate-400 mb-2">상세 지도 내용</label>
+                        <textarea id="record-detail" rows="4" placeholder="당시 상황과 지도 내용을 상세히 기술해주세요." class="w-full border border-slate-100 rounded-lg shadow-sm py-3 px-3 focus:ring-2 focus:ring-indigo-200 outline-none bg-slate-50 text-slate-700 text-sm resize-none" disabled></textarea>
+                    </div>
+
+                    <div class="pt-4">
+                        <button onclick="submitRecord()" class="w-full py-4 bg-slate-400 text-white font-bold rounded-lg transition text-lg tracking-wide pointer-events-none" id="btn-submit">성찰카드 등록하기</button>
+                    </div>
+                </div>
+            </div>
+            
+        </div>
+
+        <!-- 관리자 화면 -->
+        <div id="admin-screen" class="hidden h-full flex flex-col bg-slate-100 overflow-hidden">
+            <!-- 관리자 탭 -->
+            <div class="bg-white border-b border-slate-200 shadow-sm flex px-4 gap-2 flex-shrink-0 overflow-x-auto">
+                <button onclick="switchAdminTab('dashboard')" id="admin-tab-dashboard" class="px-5 py-4 font-semibold text-sm border-b-2 border-indigo-700 text-indigo-700 whitespace-nowrap">누적 현황 관리</button>
+                <button onclick="switchAdminTab('unreceived')" id="admin-tab-unreceived" class="px-5 py-4 font-semibold text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700 whitespace-nowrap">미수합 성찰카드</button>
+                <button onclick="switchAdminTab('teachers')" id="admin-tab-teachers" class="px-5 py-4 font-semibold text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700 whitespace-nowrap">교사 계정 관리</button>
+            </div>
+
+            <!-- 관리자 컨텐츠 영역 -->
+            <div class="flex-1 overflow-y-auto p-4 sm:p-6 max-w-7xl mx-auto w-full">
+                
+                <!-- 탭 1: 누적 현황 -->
+                <div id="admin-view-dashboard" class="fade-in space-y-6">
+                    <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+                        <h2 class="font-bold text-slate-800 text-lg mb-2">생활지도 누적 대상자</h2>
+                        <p class="text-sm text-slate-500 mb-6">규칙에 따라 3회, 4회, 5회 이상 누적된 학생 목록입니다. 이름을 클릭하면 상세 내역을 볼 수 있습니다.</p>
+                        
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <!-- 3회 누적 -->
+                            <div class="bg-yellow-50 rounded-lg border border-yellow-200 p-4 flex flex-col">
+                                <div class="border-b border-yellow-200 pb-2 mb-3">
+                                    <h3 class="font-bold text-yellow-800">3회 누적 (성찰문 작성)</h3>
+                                </div>
+                                <div id="admin-list-3" class="space-y-2 flex-1"></div>
+                            </div>
+                            <!-- 4회 누적 -->
+                            <div class="bg-orange-50 rounded-lg border border-orange-200 p-4 flex flex-col">
+                                <div class="border-b border-orange-200 pb-2 mb-3">
+                                    <h3 class="font-bold text-orange-800">4회 누적 (성찰교실)</h3>
+                                </div>
+                                <div id="admin-list-4" class="space-y-2 flex-1"></div>
+                            </div>
+                            <!-- 5회 누적 -->
+                            <div class="bg-red-50 rounded-lg border border-red-200 p-4 flex flex-col">
+                                <div class="border-b border-red-200 pb-2 mb-3">
+                                    <h3 class="font-bold text-red-800">5회 누적 (생활교육위원회)</h3>
+                                </div>
+                                <div id="admin-list-5" class="space-y-2 flex-1"></div>
+                            </div>
+                        </div>
+
+                        <!-- 전체 누적 리스트 추가 (1, 2회 포함) -->
+                        <div class="mt-10 border-t border-slate-200 pt-8">
+                            <div class="flex flex-col lg:flex-row justify-between items-start lg:items-end mb-4 gap-4">
+                                <div>
+                                    <h3 class="font-bold text-slate-800 text-lg">전체 성찰카드 누적 현황</h3>
+                                    <p class="text-sm text-slate-500">성찰카드를 1회 이상 받은 모든 학생의 전체 리스트입니다.</p>
+                                </div>
+                                <div class="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+                                    <div class="flex items-center gap-2">
+                                        <label class="text-sm font-medium text-slate-600 whitespace-nowrap">반:</label>
+                                        <select id="filter-class" onchange="renderAllStudentsList()" class="border border-slate-300 rounded-lg py-1.5 px-2 text-sm focus:ring-indigo-500 outline-none bg-white">
+                                            <option value="">전체</option>
+                                            <option value="1">1반</option>
+                                            <option value="2">2반</option>
+                                            <option value="3">3반</option>
+                                            <option value="4">4반</option>
+                                            <option value="5">5반</option>
+                                            <option value="6">6반</option>
+                                            <option value="7">7반</option>
+                                            <option value="8">8반</option>
+                                        </select>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <label class="text-sm font-medium text-slate-600 whitespace-nowrap">현재 누적:</label>
+                                        <select id="filter-current-count" onchange="renderAllStudentsList()" class="border border-slate-300 rounded-lg py-1.5 px-2 text-sm focus:ring-indigo-500 outline-none bg-white">
+                                            <option value="">전체</option>
+                                            <option value="1">1회</option>
+                                            <option value="2">2회</option>
+                                            <option value="3">3회</option>
+                                            <option value="4">4회</option>
+                                            <option value="5">5회 이상</option>
+                                        </select>
+                                    </div>
+                                    <div class="flex items-center gap-2">
+                                        <label class="text-sm font-medium text-slate-600 whitespace-nowrap">총 누적:</label>
+                                        <select id="filter-total-count" onchange="renderAllStudentsList()" class="border border-slate-300 rounded-lg py-1.5 px-2 text-sm focus:ring-indigo-500 outline-none bg-white">
+                                            <option value="">전체</option>
+                                            <option value="1">1회</option>
+                                            <option value="2">2회</option>
+                                            <option value="3">3회</option>
+                                            <option value="4">4회</option>
+                                            <option value="5">5회 이상</option>
+                                        </select>
+                                    </div>
+                                    <div class="flex items-center gap-2 w-full sm:w-auto mt-2 sm:mt-0">
+                                        <label class="text-sm font-medium text-slate-600 whitespace-nowrap">이름 검색:</label>
+                                        <input type="text" id="search-student-name" oninput="renderAllStudentsList()" placeholder="학생 이름" class="w-full sm:w-32 border border-slate-300 rounded-lg py-1.5 px-3 text-sm focus:ring-indigo-500 outline-none bg-white">
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="overflow-x-auto border border-slate-200 rounded-lg">
+                                <table class="w-full text-sm text-left whitespace-nowrap">
+                                    <thead class="text-xs text-slate-600 bg-slate-100 uppercase">
+                                        <tr>
+                                            <th class="px-4 py-3 text-center">학년</th>
+                                            <th class="px-4 py-3 text-center">반</th>
+                                            <th class="px-4 py-3 text-center">번호</th>
+                                            <th class="px-4 py-3">이름</th>
+                                            <th class="px-4 py-3 text-center">현재 누적</th>
+                                            <th class="px-4 py-3 text-center">총 누적(초기화 포함)</th>
+                                            <th class="px-4 py-3 text-center">최근 지도 일자</th>
+                                            <th class="px-4 py-3 text-center">상세 기록</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="all-students-tbody" class="divide-y divide-slate-200 bg-white">
+                                        <!-- 동적 렌더링 -->
+                                    </tbody>
+                                </table>
+                                <div id="all-students-empty" class="hidden text-center py-10 text-slate-400 bg-white">검색 결과가 없거나 성찰카드를 받은 학생이 없습니다.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 탭 2: 미수합 관리 -->
+                <div id="admin-view-unreceived" class="hidden fade-in">
+                    <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+                        <div class="flex flex-col lg:flex-row justify-between items-start lg:items-end mb-4 gap-4">
+                            <div>
+                                <h2 class="font-bold text-slate-800 text-lg mb-1">미수합 성찰카드 관리</h2>
+                                <p class="text-sm text-slate-500">교사가 시스템에 입력했으나, 아직 실물 일지를 제출받지 못한 목록입니다.</p>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+                                <div class="flex items-center gap-2">
+                                    <label class="text-sm font-medium text-slate-600 whitespace-nowrap">정렬 기준:</label>
+                                    <select id="sort-unreceived" onchange="renderUnreceived()" class="border border-slate-300 rounded-lg py-1.5 px-2 text-sm focus:ring-indigo-500 outline-none bg-white">
+                                        <option value="date-asc">날짜순 (오래된 순)</option>
+                                        <option value="class-student">반/학생순</option>
+                                    </select>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <label class="text-sm font-medium text-slate-600 whitespace-nowrap">반 필터:</label>
+                                    <select id="filter-unreceived-class" onchange="renderUnreceived()" class="border border-slate-300 rounded-lg py-1.5 px-2 text-sm focus:ring-indigo-500 outline-none bg-white">
+                                        <option value="">전체</option>
+                                        <option value="1">1반</option>
+                                        <option value="2">2반</option>
+                                        <option value="3">3반</option>
+                                        <option value="4">4반</option>
+                                        <option value="5">5반</option>
+                                        <option value="6">6반</option>
+                                        <option value="7">7반</option>
+                                        <option value="8">8반</option>
+                                    </select>
+                                </div>
+                                <span class="text-xs font-semibold px-3 py-1.5 bg-red-100 text-red-700 rounded-lg whitespace-nowrap shadow-sm" id="unreceived-count">0건</span>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto border border-slate-200 rounded-lg">
+                            <table class="w-full text-sm text-left whitespace-nowrap">
+                                <thead class="text-xs text-slate-600 bg-slate-100 uppercase">
+                                    <tr>
+                                        <th class="px-4 py-3 text-center">반</th>
+                                        <th class="px-4 py-3 text-center">번호</th>
+                                        <th class="px-4 py-3">이름</th>
+                                        <th class="px-4 py-3 text-center">지도일자</th>
+                                        <th class="px-4 py-3 text-center">지도교사</th>
+                                        <th class="px-4 py-3">사유 (1차/2차)</th>
+                                        <th class="px-4 py-3 text-center">수합확인</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="unreceived-tbody" class="divide-y divide-slate-200 bg-white">
+                                    <!-- 동적 렌더링 -->
+                                </tbody>
+                            </table>
+                            <div id="unreceived-empty" class="hidden text-center py-10 text-slate-400 bg-white">모든 성찰카드가 수합되었습니다.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 탭 3: 교사 관리 -->
+                <div id="admin-view-teachers" class="hidden fade-in">
+                    <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 max-w-2xl">
+                        <h2 class="font-bold text-slate-800 text-lg mb-1">등록된 교사 계정</h2>
+                        <p class="text-sm text-slate-500 mb-4">시스템에 접근 권한이 있는 교사 목록입니다.</p>
+                        <div class="border border-slate-200 rounded-lg overflow-hidden">
+                            <ul id="admin-teacher-list" class="divide-y divide-slate-200">
+                                <!-- 동적 렌더링 -->
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // ============================================================================
+        // [중요] 구글 스크립트 웹앱 주소 입력 부분
+        // ============================================================================
+        const GOOGLE_APP_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby8uk2QL-zNHoW36yimlb-hKRclHOUBGEr9CjRy9LbsRFxL8pFwrML4JXM42jkPAEx0/exec";
+
+        // --- 데이터 정의 ---
+        const rawStudentData = [
+            [1, 1, "CHE YUNHAO(차윤호)"], [1, 2, "XU YUNYA(허윤아)"], [1, 3, "김민서"], [1, 4, "김민아"], [1, 5, "김민채"], [1, 6, "김서우"], [1, 7, "김주아"], [1, 8, "김준헌"], [1, 9, "김지효"], [1, 10, "김태현"], [1, 11, "김현식"], [1, 12, "박소윤"], [1, 13, "박소형"], [1, 14, "백세현"], [1, 15, "설주원"], [1, 16, "손지안"], [1, 17, "윤지완"], [1, 18, "윤지후"], [1, 19, "이나래"], [1, 20, "이다온"], [1, 21, "이지민"], [1, 22, "이지안"], [1, 23, "이찬"], [1, 24, "이태완"], [1, 25, "장혜원"], [1, 26, "전소민"], [1, 27, "조승비"], [1, 28, "조영우"], [1, 29, "최은설"], [1, 30, "최은효"], [1, 31, "한유림"],
+            [2, 1, "강유건"], [2, 2, "김도은"], [2, 3, "김서율"], [2, 4, "김승우"], [2, 5, "김예빈"], [2, 6, "김지훈"], [2, 7, "민서진"], [2, 8, "박도현"], [2, 9, "박지율"], [2, 10, "배승기"], [2, 11, "변재희"], [2, 12, "변선우"], [2, 13, "송상현"], [2, 14, "신지아"], [2, 15, "신지윤"], [2, 16, "원현종"], [2, 17, "윤채빈"], [2, 18, "이라임"], [2, 19, "이병현"], [2, 20, "이예지"], [2, 21, "이은엽"], [2, 22, "이채원"], [2, 23, "이하진"], [2, 24, "장재인"], [2, 25, "정민혁"], [2, 26, "정유주"], [2, 27, "조창"], [2, 28, "지효정"], [2, 29, "차혜성"], [2, 30, "함예진"], [2, 31, "홍예준"],
+            [3, 1, "강태윤"], [3, 2, "고나은"], [3, 3, "구서현"], [3, 4, "권우빈"], [3, 5, "김나은"], [3, 6, "김수아"], [3, 7, "김시완"], [3, 8, "김시은"], [3, 10, "노하연"], [3, 11, "박서진"], [3, 12, "박하민"], [3, 13, "박하성"], [3, 14, "배서영"], [3, 15, "신준영"], [3, 16, "심하윤"], [3, 17, "예선우"], [3, 18, "유다원"], [3, 19, "이서연"], [3, 20, "이수아"], [3, 21, "이연우"], [3, 22, "이윤재"], [3, 23, "임다율"], [3, 24, "임예진"], [3, 25, "장서진"], [3, 26, "전도원"], [3, 27, "조민서"], [3, 28, "조하은"], [3, 29, "최효준"], [3, 30, "허태준"], [3, 31, "현유진"], [3, 32, "LI ZHIYUN(이지윤)"],
+            [4, 1, "YIN JINGYUN(윤정운)"], [4, 2, "강서연"], [4, 3, "김도빈"], [4, 4, "김로운"], [4, 5, "김리아"], [4, 6, "김서연"], [4, 7, "김연아"], [4, 8, "김은재"], [4, 9, "김지은"], [4, 10, "김진휘"], [4, 11, "민정현"], [4, 12, "박기주"], [4, 13, "박유빈"], [4, 14, "배준석"], [4, 15, "서애리"], [4, 16, "손민준"], [4, 17, "신유림"], [4, 18, "유용구"], [4, 19, "윤채원"], [4, 20, "이다은"], [4, 21, "이민건"], [4, 22, "이주아"], [4, 23, "이주원"], [4, 24, "이채연"], [4, 26, "장채아"], [4, 27, "정민후"], [4, 28, "정예지"], [4, 29, "주경모"], [4, 30, "최서은"], [4, 31, "황시우"],
+            [5, 1, "LIZHENGSHU(이정서)"], [5, 2, "강민주"], [5, 3, "김로한"], [5, 4, "김민"], [5, 5, "김사랑"], [5, 6, "김성재"], [5, 7, "김승헌"], [5, 9, "김주아"], [5, 10, "김태인"], [5, 11, "나하나"], [5, 12, "문종후"], [5, 13, "박나윤"], [5, 14, "박예나"], [5, 15, "백강호"], [5, 16, "손민규"], [5, 17, "신예빈"], [5, 18, "유주원"], [5, 19, "윤하람"], [5, 20, "이가람"], [5, 21, "이다윤"], [5, 22, "이주원"], [5, 23, "이주은"], [5, 24, "이채아"], [5, 25, "이태주"], [5, 26, "장하은"], [5, 27, "정아인"], [5, 28, "정하준"], [5, 29, "최송현"], [5, 30, "한소윤"], [5, 31, "한여원"],
+            [6, 1, "강지환"], [6, 2, "공현지"], [6, 3, "김건후"], [6, 4, "김나희"], [6, 5, "김서은"], [6, 6, "김승현"], [6, 7, "김연서"], [6, 8, "김주원"], [6, 9, "김하희"], [6, 10, "노하은"], [6, 11, "박범준"], [6, 12, "박채원"], [6, 13, "박하엘"], [6, 14, "백서은"], [6, 15, "신주완"], [6, 16, "신채희"], [6, 17, "오재원"], [6, 18, "유미나"], [6, 19, "이민경"], [6, 20, "이수안"], [6, 21, "이시우"], [6, 22, "이윤재"], [6, 23, "이현재"], [6, 24, "이혜율"], [6, 25, "임채율"], [6, 26, "전준영"], [6, 27, "정하율"], [6, 28, "조혜인"], [6, 30, "현예영"], [6, 31, "홍동진"],
+            [7, 1, "강윤제"], [7, 2, "공나윤"], [7, 3, "김경민"], [7, 4, "김다율"], [7, 5, "김서은"], [7, 6, "김슬우"], [7, 7, "김주아"], [7, 8, "김지윤"], [7, 9, "김채민"], [7, 10, "문서연"], [7, 11, "박민서"], [7, 12, "박채빈"], [7, 13, "방정우"], [7, 14, "서지애"], [7, 15, "서지우"], [7, 16, "신서율"], [7, 17, "우선우"], [7, 18, "윤예은"], [7, 19, "이로하"], [7, 20, "이상우"], [7, 21, "이예서"], [7, 22, "이윤호"], [7, 23, "이하랑"], [7, 24, "이현우"], [7, 25, "장윤지"], [7, 26, "정대윤"], [7, 27, "정채린"], [7, 28, "주지현"], [7, 29, "최연우"], [7, 30, "허아영"], [7, 31, "홍서빈"],
+            [8, 1, "계은빈"], [8, 2, "권범준"], [8, 3, "권아윤"], [8, 4, "김규빈"], [8, 5, "김시아"], [8, 6, "김시연"], [8, 7, "김아인"], [8, 8, "노영서"], [8, 9, "노윤서"], [8, 10, "박이든"], [8, 11, "박준우"], [8, 12, "박하율"], [8, 13, "반서윤"], [8, 14, "신하윤"], [8, 15, "안수진"], [8, 16, "안제이"], [8, 17, "오서연"], [8, 18, "이소율"], [8, 19, "이수빈"], [8, 20, "이연우"], [8, 21, "이예담"], [8, 22, "임서린"], [8, 23, "임승연"], [8, 24, "장제윤"], [8, 25, "장태희"], [8, 26, "조윤진"], [8, 27, "조하율"], [8, 28, "한상욱"], [8, 29, "허찬욱"], [8, 30, "황수련"], [8, 31, "황하윤"]
+        ];
+
+        // 학번(ID) 포맷
+        const students = rawStudentData.map(data => {
+            const c = data[0];
+            const n = data[1];
+            const sId = `1${String(c).padStart(2, '0')}${String(n).padStart(2, '0')}`;
+            return { id: sId, grade: 1, classNum: c, num: n, name: data[2] };
+        });
+
+        const categories = {
+            "용모 복장": ["복장 위반", "장신구(귀걸이)", "색조 화장", "고성방가"],
+            "수업": ["수업 장소 이탈", "핸드폰 무단 사용", "수업 방해", "지시 불이행"],
+            "학교 생활": ["쓰레기 투척", "바닥에 침 뱉기", "질서유지 위반", "위험 행동(난간)", "기타"]
+        };
+
+        // --- 상태 관리 ---
+        let state = {
+            users: [], 
+            records: [],
+            studentCycles: {}, 
+        };
+
+        let currentUser = null;
+        let selectedClass = null;
+        let selectedStudent = null;
+
+        // --- 구글 시트 연동을 위한 로딩 UI 함수 ---
+        function showLoading(show, message = "데이터 처리 중...") {
+            const overlay = document.getElementById('loading-overlay');
+            const msgEl = document.getElementById('loading-msg');
+            msgEl.textContent = message;
+            if (show) {
+                overlay.classList.remove('hidden');
+            } else {
+                overlay.classList.add('hidden');
+            }
+        }
+
+        // --- 초기화 및 서버 통신 (구글 시트 연동) ---
+        async function loadState() {
+            showLoading(true, "서버에서 데이터를 불러오는 중입니다...");
+            try {
+                const response = await fetch(GOOGLE_APP_SCRIPT_URL);
+                const data = await response.json();
+                if (data && Array.isArray(data.users)) {
+                    state = data;
+                }
+            } catch (error) {
+                console.error("데이터 로드 실패:", error);
+                showToast("서버 연결 실패. (로컬 데이터로 대체됩니다.)");
+                const saved = localStorage.getItem('laraState_v1');
+                if (saved) state = JSON.parse(saved);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        async function saveState() {
+            // 로컬 스토리지 백업 (오프라인/에러 대비)
+            localStorage.setItem('laraState_v1', JSON.stringify(state));
+
+            showLoading(true, "서버에 저장 중입니다...");
+            try {
+                // CORS 문제 우회를 위해 text/plain 전송
+                await fetch(GOOGLE_APP_SCRIPT_URL, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                    body: JSON.stringify(state)
+                });
+            } catch (error) {
+                console.error("데이터 저장 실패:", error);
+                showToast("서버 저장 실패. 다음 접속 시 문제 발생 시 관리자 문의 요망.");
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        // --- UI 헬퍼 함수 ---
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            toast.textContent = msg;
+            toast.classList.remove('hidden', 'opacity-0');
+            setTimeout(() => {
+                toast.classList.add('opacity-0');
+                setTimeout(() => toast.classList.add('hidden'), 300);
+            }, 2500);
+        }
+
+        let confirmCallback = null;
+        function showConfirm(msg, callback) {
+            document.getElementById('confirm-msg').textContent = msg;
+            confirmCallback = callback;
+            document.getElementById('confirm-modal').classList.remove('hidden');
+        }
+        function closeConfirm() {
+            document.getElementById('confirm-modal').classList.add('hidden');
+            confirmCallback = null;
+        }
+        document.getElementById('confirm-btn').addEventListener('click', () => {
+            if (confirmCallback) confirmCallback();
+            closeConfirm();
+        });
+
+        // --- 인증 로직 ---
+        function switchAuthTab(tab) {
+            const tLogin = document.getElementById('tab-login');
+            const tReg = document.getElementById('tab-register');
+            const fLogin = document.getElementById('form-login');
+            const fReg = document.getElementById('form-register');
+
+            if (tab === 'login') {
+                tLogin.className = "flex-1 py-4 text-center tab-active transition";
+                tReg.className = "flex-1 py-4 text-center tab-inactive transition";
+                fLogin.classList.remove('hidden');
+                fReg.classList.add('hidden');
+            } else {
+                tReg.className = "flex-1 py-4 text-center tab-active transition";
+                tLogin.className = "flex-1 py-4 text-center tab-inactive transition";
+                fReg.classList.remove('hidden');
+                fLogin.classList.add('hidden');
+            }
+        }
+
+        async function handleRegister() {
+            const name = document.getElementById('reg-name').value.trim();
+            const pin = document.getElementById('reg-pin').value;
+            
+            if (!name || pin.length !== 4) {
+                showToast("이름과 4자리 PIN 번호를 정확히 입력해주세요.");
+                return;
+            }
+            if (state.users.find(u => u.name === name)) {
+                showToast("이미 등록된 이름입니다.");
+                return;
+            }
+
+            const adminList = ['안효은', '홍준선', '변예원', '양미영', '김선심'];
+            const role = adminList.includes(name) ? 'admin' : 'teacher';
+            
+            state.users.push({ name, pin, role });
+            await saveState(); // 비동기 저장 대기
+            
+            showToast(`교사 등록 완료! (${role === 'admin' ? '관리자' : '일반교사'})`);
+            document.getElementById('reg-name').value = '';
+            document.getElementById('reg-pin').value = '';
+            
+            switchAuthTab('login');
+            
+            document.getElementById('login-name').value = name;
+        }
+
+        function handleLogin() {
+            const name = document.getElementById('login-name').value.trim();
+            const pin = document.getElementById('login-pin').value;
+            
+            if (!name || !pin) {
+                showToast("이름과 PIN 번호를 모두 입력해주세요.");
+                return;
+            }
+
+            const user = state.users.find(u => u.name === name);
+            if (!user) {
+                showToast("등록된 계정이 없습니다.");
+                return;
+            }
+            
+            if (user.pin === pin) {
+                currentUser = user;
+                document.getElementById('login-pin').value = '';
+                enterApp();
+            } else {
+                showToast("PIN 번호가 일치하지 않습니다.");
+            }
+        }
+
+        function logout() {
+            currentUser = null;
+            selectedStudent = null;
+            document.getElementById('login-screen').classList.remove('hidden');
+            document.getElementById('app-screen').classList.add('hidden');
+            document.getElementById('admin-screen').classList.add('hidden');
+            document.getElementById('header-user-info').classList.add('hidden');
+        }
+
+        function enterApp() {
+            document.getElementById('login-screen').classList.add('hidden');
+            document.getElementById('header-user-info').classList.remove('hidden');
+            
+            let roleBadge = currentUser.role === 'admin' ? '<span class="ml-2 bg-slate-800 text-white text-xs px-2 py-0.5 rounded-full font-bold">관리자</span>' : '';
+            document.getElementById('header-welcome-text').innerHTML = `${currentUser.name} 선생님 ${roleBadge}`;
+
+            document.getElementById('btn-goto-admin').classList.remove('hidden');
+            document.getElementById('btn-goto-teacher').classList.remove('hidden');
+
+            if (currentUser.role === 'admin') {
+                openAdminView(); 
+            } else {
+                openTeacherView();
+            }
+
+            initCategories();
+        }
+
+        // --- 네비게이션 ---
+        document.getElementById('btn-goto-admin').addEventListener('click', openAdminView);
+        document.getElementById('btn-goto-teacher').addEventListener('click', openTeacherView);
+
+        function openTeacherView() {
+            document.getElementById('app-screen').classList.remove('hidden');
+            document.getElementById('admin-screen').classList.add('hidden');
+            
+            const classSelect = document.getElementById('select-class');
+            if (classSelect.options.length === 1) {
+                for (let i = 1; i <= 8; i++) {
+                    const opt = document.createElement('option');
+                    opt.value = i;
+                    opt.textContent = `${i}반`;
+                    classSelect.appendChild(opt);
+                }
+            }
+            
+            if(!selectedStudent) {
+                resetStudentSelection();
+                classSelect.value = '';
+                document.getElementById('select-student').innerHTML = '<option value="">학생을 선택하세요</option>';
+                document.getElementById('select-student').disabled = true;
+                
+                document.getElementById('select-student').classList.replace('border-indigo-600', 'border-slate-200');
+                document.getElementById('select-student').classList.replace('bg-white', 'bg-slate-50');
+                document.getElementById('select-student').classList.replace('text-slate-700', 'text-slate-400');
+            }
+            
+            document.getElementById('record-date').valueAsDate = new Date();
+        }
+
+        function openAdminView() {
+            document.getElementById('app-screen').classList.add('hidden');
+            document.getElementById('admin-screen').classList.remove('hidden');
+            
+            if (currentUser.role === 'admin') {
+                document.getElementById('admin-tab-unreceived').classList.remove('hidden');
+                document.getElementById('admin-tab-teachers').classList.remove('hidden');
+            } else {
+                document.getElementById('admin-tab-unreceived').classList.add('hidden');
+                document.getElementById('admin-tab-teachers').classList.add('hidden');
+            }
+            
+            switchAdminTab('dashboard');
+        }
+
+        // --- 교사 입력 뷰 로직 ---
+        function initCategories() {
+            const cat1Select = document.getElementById('cat1');
+            cat1Select.innerHTML = '<option value="">영역 선택</option>';
+            for (let key in categories) {
+                const opt = document.createElement('option');
+                opt.value = key;
+                opt.textContent = key;
+                cat1Select.appendChild(opt);
+            }
+        }
+
+        function updateCat2() {
+            const cat1 = document.getElementById('cat1').value;
+            const cat2Select = document.getElementById('cat2');
+            
+            if (!cat1) {
+                cat2Select.innerHTML = '<option value="">세부항목 선택</option>';
+                cat2Select.disabled = true;
+                document.getElementById('other-input-container').classList.add('hidden');
+                
+                cat2Select.classList.replace('bg-white', 'bg-slate-50');
+                cat2Select.classList.replace('border-slate-300', 'border-slate-100');
+                return;
+            }
+
+            cat2Select.disabled = false;
+            cat2Select.classList.replace('bg-slate-50', 'bg-white');
+            cat2Select.classList.replace('border-slate-100', 'border-slate-300');
+            
+            cat2Select.innerHTML = '<option value="">세부항목 선택</option>';
+            categories[cat1].forEach(item => {
+                const opt = document.createElement('option');
+                opt.value = item;
+                opt.textContent = item;
+                cat2Select.appendChild(opt);
+            });
+            checkOther();
+        }
+
+        function checkOther() {
+            const cat2 = document.getElementById('cat2').value;
+            const otherContainer = document.getElementById('other-input-container');
+            if (cat2 === '기타') {
+                otherContainer.classList.remove('hidden');
+            } else {
+                otherContainer.classList.add('hidden');
+                document.getElementById('cat-other').value = '';
+            }
+        }
+
+        function handleClassChange() {
+            const classNum = parseInt(document.getElementById('select-class').value);
+            const studentSelect = document.getElementById('select-student');
+            
+            if (!classNum) {
+                studentSelect.innerHTML = '<option value="">학생을 선택하세요</option>';
+                studentSelect.disabled = true;
+                studentSelect.classList.replace('border-indigo-600', 'border-slate-200');
+                studentSelect.classList.replace('bg-white', 'bg-slate-50');
+                studentSelect.classList.replace('text-slate-700', 'text-slate-400');
+                resetStudentSelection();
+                return;
+            }
+
+            studentSelect.disabled = false;
+            studentSelect.innerHTML = '<option value="">학생을 선택하세요</option>';
+            
+            studentSelect.classList.replace('border-slate-200', 'border-indigo-600');
+            studentSelect.classList.replace('bg-slate-50', 'bg-white');
+            studentSelect.classList.replace('text-slate-400', 'text-slate-700');
+            
+            const classStudents = students.filter(s => s.classNum === classNum);
+            classStudents.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s.id;
+                opt.textContent = `${s.num}번 ${s.name}`;
+                studentSelect.appendChild(opt);
+            });
+            
+            resetStudentSelection();
+        }
+
+        function handleStudentChange() {
+            const studentId = document.getElementById('select-student').value;
+            if (!studentId) {
+                resetStudentSelection();
+                return;
+            }
+            const student = students.find(s => s.id === studentId);
+            if (student) {
+                selectStudent(student);
+            }
+        }
+
+        function selectStudent(student) {
+            selectedStudent = student;
+            
+            document.getElementById('selected-student-summary').classList.remove('hidden');
+            
+            document.getElementById('cat1').disabled = false;
+            document.getElementById('record-date').disabled = false;
+            document.getElementById('record-detail').disabled = false;
+            
+            ['cat1', 'record-date', 'record-detail'].forEach(id => {
+                const el = document.getElementById(id);
+                el.classList.replace('bg-slate-50', 'bg-white');
+                el.classList.replace('border-slate-100', 'border-slate-300');
+            });
+            document.querySelectorAll('#input-container label').forEach(lbl => {
+                lbl.classList.replace('text-slate-400', 'text-slate-500');
+            });
+            document.querySelector('#input-container h2').classList.replace('text-slate-400', 'text-slate-800');
+            document.querySelector('#input-container h2 svg').classList.replace('text-indigo-200', 'text-indigo-400');
+            
+            document.getElementById('selected-student-name').textContent = student.name;
+            document.getElementById('selected-student-info').textContent = student.id;
+            
+            const count = getStudentEffectiveCount(student.id);
+            document.getElementById('selected-student-count').textContent = count;
+
+            document.getElementById('cat1').value = '';
+            updateCat2();
+            document.getElementById('record-detail').value = '';
+            
+            const submitBtn = document.getElementById('btn-submit');
+            submitBtn.className = "w-full py-4 bg-indigo-500 hover:bg-indigo-600 shadow-md text-white font-bold rounded-lg transition text-lg tracking-wide";
+        }
+
+        function resetStudentSelection() {
+            selectedStudent = null;
+            document.getElementById('selected-student-summary').classList.add('hidden');
+            
+            document.getElementById('cat1').value = '';
+            document.getElementById('cat1').disabled = true;
+            document.getElementById('cat2').innerHTML = '<option value="">세부항목 선택</option>';
+            document.getElementById('cat2').disabled = true;
+            document.getElementById('cat-other').value = '';
+            document.getElementById('other-input-container').classList.add('hidden');
+            document.getElementById('record-detail').value = '';
+            document.getElementById('record-detail').disabled = true;
+            document.getElementById('record-date').disabled = true;
+
+            ['cat1', 'cat2', 'record-date', 'record-detail'].forEach(id => {
+                const el = document.getElementById(id);
+                el.classList.replace('bg-white', 'bg-slate-50');
+                el.classList.replace('border-slate-300', 'border-slate-100');
+            });
+            
+            document.querySelectorAll('#input-container label').forEach(lbl => {
+                lbl.classList.replace('text-slate-500', 'text-slate-400');
+            });
+            document.querySelector('#input-container h2').classList.replace('text-slate-800', 'text-slate-400');
+            document.querySelector('#input-container h2 svg').classList.replace('text-indigo-400', 'text-indigo-200');
+
+            document.getElementById('btn-submit').className = "w-full py-4 bg-slate-400 text-white font-bold rounded-lg transition text-lg tracking-wide pointer-events-none";
+        }
+
+        function getStudentHistory(studentId) {
+            return state.records.filter(r => r.studentId === studentId).sort((a,b) => new Date(b.date) - new Date(a.date) || b.timestamp - a.timestamp);
+        }
+
+        function getStudentEffectiveCount(studentId) {
+            const total = state.records.filter(r => r.studentId === studentId).length;
+            const cycle = state.studentCycles[studentId] || 0;
+            return Math.max(0, total - (cycle * 5));
+        }
+
+        function submitRecord() {
+            if (!selectedStudent) return;
+            
+            const cat1 = document.getElementById('cat1').value;
+            const cat2 = document.getElementById('cat2').value;
+            const catOther = document.getElementById('cat-other').value.trim();
+            const date = document.getElementById('record-date').value;
+            const detail = document.getElementById('record-detail').value.trim();
+
+            if (!cat1 || !cat2 || !date || !detail) {
+                showToast("모든 항목을 입력해주세요.");
+                return;
+            }
+            if (cat2 === '기타' && !catOther) {
+                showToast("기타 상세 사유를 입력해주세요.");
+                return;
+            }
+
+            const record = {
+                id: Date.now().toString(),
+                studentId: selectedStudent.id,
+                teacherName: currentUser.name,
+                date: date,
+                cat1: cat1,
+                cat2: cat2,
+                otherDetail: catOther,
+                detail: detail,
+                received: false,
+                timestamp: Date.now()
+            };
+
+            showConfirm(`[${selectedStudent.name}] 학생에게\n성찰일지를 등록하시겠습니까?`, async () => {
+                state.records.push(record);
+                await saveState();
+                showToast("성찰일지가 등록되었습니다.");
+                
+                selectStudent(selectedStudent);
+            });
+        }
+
+        // --- 공통: 기록 보기 모달 ---
+        function showSelectedStudentHistory() {
+            if(!selectedStudent) return;
+            openHistoryModal(selectedStudent.id, selectedStudent.name);
+        }
+
+        function openHistoryModal(studentId, studentName) {
+            const history = getStudentHistory(studentId);
+            const cycle = state.studentCycles[studentId] || 0;
+            const effectiveCount = getStudentEffectiveCount(studentId);
+
+            document.getElementById('history-modal-title').textContent = `${studentId} ${studentName} 기록`;
+            
+            let html = `<div class="mb-4 text-sm bg-slate-100 p-3 rounded-lg text-slate-700">`;
+            html += `총 누적: <strong>${history.length}</strong>회 | 현재 유효 카운트: <strong class="text-indigo-600">${effectiveCount}</strong>회`;
+            if(cycle > 0) html += ` (초기화 ${cycle}회 반영됨)`;
+            html += `</div>`;
+
+            if (history.length === 0) {
+                html += `<div class="text-center text-slate-400 py-10">등록된 지도 이력이 없습니다.</div>`;
+            } else {
+                html += `<div class="space-y-4">`;
+                history.forEach((r, idx) => {
+                    const cardNum = history.length - idx;
+                    const reason = r.cat2 === '기타' ? `기타(${r.otherDetail})` : r.cat2;
+                    const badge = r.received 
+                        ? `<span class="bg-green-100 text-green-700 px-2 py-0.5 rounded text-xs">수합됨</span>`
+                        : `<span class="bg-red-100 text-red-700 px-2 py-0.5 rounded text-xs">미수합</span>`;
+                    
+                    html += `
+                        <div class="border border-slate-200 rounded-lg p-4 bg-white relative group">
+                            <div class="absolute top-4 right-4 flex items-center gap-3">
+                                ${badge}
+                                <div class="opacity-0 group-hover:opacity-100 transition flex items-center gap-2">
+                                    <button onclick="openEditModal('${r.id}', '${studentId}', '${studentName}')" class="text-xs text-slate-400 hover:text-indigo-600 transition font-semibold">수정</button>
+                                    <button onclick="deleteRecord('${r.id}', '${studentId}', '${studentName}')" class="text-xs text-slate-400 hover:text-red-600 transition font-semibold">삭제</button>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2 mb-2">
+                                <span class="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">${cardNum}</span>
+                                <span class="text-sm font-semibold text-slate-500">${r.date}</span>
+                                <span class="text-sm text-slate-400">| 지도: ${r.teacherName} 선생님</span>
+                            </div>
+                            <div class="mb-2">
+                                <span class="font-bold text-indigo-700">[${r.cat1}]</span> ${reason}
+                            </div>
+                            <div class="text-sm text-slate-700 bg-slate-50 p-3 rounded border border-slate-100 whitespace-pre-wrap">${r.detail}</div>
+                        </div>
+                    `;
+                });
+                html += `</div>`;
+            }
+            
+            document.getElementById('history-modal-content').innerHTML = html;
+            document.getElementById('history-modal').classList.remove('hidden');
+        }
+
+        // --- 기록 수정 및 삭제 기능 ---
+        let currentEditRecordId = null;
+        let currentEditStudentId = null;
+        let currentEditStudentName = null;
+
+        function deleteRecord(recordId, studentId, studentName) {
+            showConfirm('해당 성찰카드 기록을 정말 삭제하시겠습니까?', async () => {
+                state.records = state.records.filter(r => r.id !== recordId);
+                await saveState();
+                showToast('기록이 성공적으로 삭제되었습니다.');
+                
+                openHistoryModal(studentId, studentName); 
+                
+                if (!document.getElementById('admin-screen').classList.contains('hidden')) {
+                    renderAdminDashboard();
+                    renderUnreceived();
+                } else if (selectedStudent && selectedStudent.id === studentId) {
+                    selectStudent(selectedStudent);
+                }
+            });
+        }
+
+        function openEditModal(recordId, sId, sName) {
+            const record = state.records.find(r => r.id === recordId);
+            if(!record) return;
+
+            currentEditRecordId = recordId;
+            currentEditStudentId = sId;
+            currentEditStudentName = sName;
+
+            const cat1Select = document.getElementById('edit-cat1');
+            cat1Select.innerHTML = '<option value="">영역 선택</option>';
+            for (let key in categories) {
+                const opt = document.createElement('option');
+                opt.value = key;
+                opt.textContent = key;
+                if(key === record.cat1) opt.selected = true;
+                cat1Select.appendChild(opt);
+            }
+
+            updateEditCat2(record.cat2);
+            
+            if (record.cat2 === '기타') {
+                document.getElementById('edit-other-input-container').classList.remove('hidden');
+                document.getElementById('edit-cat-other').value = record.otherDetail;
+            } else {
+                document.getElementById('edit-other-input-container').classList.add('hidden');
+                document.getElementById('edit-cat-other').value = '';
+            }
+
+            document.getElementById('edit-record-date').value = record.date;
+            document.getElementById('edit-record-detail').value = record.detail;
+
+            document.getElementById('edit-modal').classList.remove('hidden');
+        }
+
+        function closeEditModal() {
+            document.getElementById('edit-modal').classList.add('hidden');
+            currentEditRecordId = null;
+        }
+
+        function updateEditCat2(selectedCat2 = null) {
+            const cat1 = document.getElementById('edit-cat1').value;
+            const cat2Select = document.getElementById('edit-cat2');
+            
+            cat2Select.innerHTML = '<option value="">세부항목 선택</option>';
+            if(cat1 && categories[cat1]) {
+                categories[cat1].forEach(item => {
+                    const opt = document.createElement('option');
+                    opt.value = item;
+                    opt.textContent = item;
+                    if(item === selectedCat2) opt.selected = true;
+                    cat2Select.appendChild(opt);
+                });
+            }
+            checkEditOther();
+        }
+
+        function checkEditOther() {
+            const cat2 = document.getElementById('edit-cat2').value;
+            if (cat2 === '기타') {
+                document.getElementById('edit-other-input-container').classList.remove('hidden');
+            } else {
+                document.getElementById('edit-other-input-container').classList.add('hidden');
+                document.getElementById('edit-cat-other').value = '';
+            }
+        }
+
+        async function saveEditRecord() {
+            const cat1 = document.getElementById('edit-cat1').value;
+            const cat2 = document.getElementById('edit-cat2').value;
+            const catOther = document.getElementById('edit-cat-other').value.trim();
+            const date = document.getElementById('edit-record-date').value;
+            const detail = document.getElementById('edit-record-detail').value.trim();
+
+            if (!cat1 || !cat2 || !date || !detail) {
+                showToast("모든 항목을 입력해주세요.");
+                return;
+            }
+            if (cat2 === '기타' && !catOther) {
+                showToast("기타 상세 사유를 입력해주세요.");
+                return;
+            }
+
+            const record = state.records.find(r => r.id === currentEditRecordId);
+            if(record) {
+                record.cat1 = cat1;
+                record.cat2 = cat2;
+                record.otherDetail = catOther;
+                record.date = date;
+                record.detail = detail;
+                
+                await saveState();
+                showToast("기록이 성공적으로 수정되었습니다.");
+                closeEditModal();
+                openHistoryModal(currentEditStudentId, currentEditStudentName);
+                
+                if (!document.getElementById('admin-screen').classList.contains('hidden')) {
+                    renderAdminDashboard();
+                    renderUnreceived();
+                } else if (selectedStudent && selectedStudent.id === currentEditStudentId) {
+                    selectStudent(selectedStudent);
+                }
+            }
+        }
+
+        function closeHistoryModal() {
+            document.getElementById('history-modal').classList.add('hidden');
+        }
+
+        // --- 관리자 뷰 로직 ---
+        function switchAdminTab(tab) {
+            ['dashboard', 'unreceived', 'teachers'].forEach(t => {
+                const btn = document.getElementById(`admin-tab-${t}`);
+                const view = document.getElementById(`admin-view-${t}`);
+                if (t === tab) {
+                    btn.className = "px-5 py-4 font-semibold text-sm border-b-2 border-indigo-700 text-indigo-700 whitespace-nowrap";
+                    view.classList.remove('hidden');
+                } else {
+                    btn.className = "px-5 py-4 font-semibold text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700 whitespace-nowrap";
+                    view.classList.add('hidden');
+                }
+            });
+
+            if (tab === 'dashboard') renderAdminDashboard();
+            if (tab === 'unreceived') renderUnreceived();
+            if (tab === 'teachers') renderTeachers();
+        }
+
+        function renderAdminDashboard() {
+            const list3 = document.getElementById('admin-list-3');
+            const list4 = document.getElementById('admin-list-4');
+            const list5 = document.getElementById('admin-list-5');
+            list3.innerHTML = ''; list4.innerHTML = ''; list5.innerHTML = '';
+
+            let count3 = 0, count4 = 0, count5 = 0;
+
+            students.forEach(s => {
+                const c = getStudentEffectiveCount(s.id);
+                if (c >= 3) {
+                    let targetList;
+                    if (c === 3) { targetList = list3; count3++; }
+                    else if (c === 4) { targetList = list4; count4++; }
+                    else if (c >= 5) { targetList = list5; count5++; } 
+
+                    const div = document.createElement('div');
+                    div.className = "bg-white p-3 rounded border border-slate-200 shadow-sm flex justify-between items-center";
+                    
+                    let html = `
+                        <div class="cursor-pointer hover:text-indigo-600 transition" onclick="openHistoryModal('${s.id}', '${s.name}')">
+                            <span class="font-bold text-slate-800">${s.id} ${s.name}</span>
+                            <div class="text-xs text-slate-500 mt-1">현재 누적: ${c}회</div>
+                        </div>
+                    `;
+
+                    if (c >= 5) {
+                        html += `<button onclick="resetStudentCycle('${s.id}', '${s.name}')" class="px-2 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs rounded font-medium shadow-sm">회부 및 초기화</button>`;
+                    }
+
+                    div.innerHTML = html;
+                    targetList.appendChild(div);
+                }
+            });
+
+            if(count3 === 0) list3.innerHTML = '<div class="text-sm text-slate-400 p-2 text-center">대상자 없음</div>';
+            if(count4 === 0) list4.innerHTML = '<div class="text-sm text-slate-400 p-2 text-center">대상자 없음</div>';
+            if(count5 === 0) list5.innerHTML = '<div class="text-sm text-slate-400 p-2 text-center">대상자 없음</div>';
+
+            renderAllStudentsList();
+        }
+
+        function renderAllStudentsList() {
+            const tbody = document.getElementById('all-students-tbody');
+            const emptyMsg = document.getElementById('all-students-empty');
+            const filterClass = document.getElementById('filter-class').value;
+            const filterCurrentCount = document.getElementById('filter-current-count').value;
+            const filterTotalCount = document.getElementById('filter-total-count').value;
+            const searchQuery = document.getElementById('search-student-name').value.trim().toLowerCase();
+            tbody.innerHTML = '';
+
+            let targetStudents = students.map(s => {
+                const history = getStudentHistory(s.id);
+                if (history.length === 0) return null;
+                
+                const effectiveCount = getStudentEffectiveCount(s.id);
+                const latestDate = history[0].date; 
+                return {
+                    ...s,
+                    effectiveCount: effectiveCount,
+                    totalCount: history.length,
+                    latestDate: latestDate
+                };
+            }).filter(s => s !== null);
+
+            if (searchQuery) targetStudents = targetStudents.filter(s => s.name.toLowerCase().includes(searchQuery));
+            if (filterClass) targetStudents = targetStudents.filter(s => s.classNum === parseInt(filterClass));
+            if (filterCurrentCount) {
+                const fCount = parseInt(filterCurrentCount);
+                targetStudents = fCount === 5 ? targetStudents.filter(s => s.effectiveCount >= 5) : targetStudents.filter(s => s.effectiveCount === fCount);
+            }
+            if (filterTotalCount) {
+                const fCount = parseInt(filterTotalCount);
+                targetStudents = fCount === 5 ? targetStudents.filter(s => s.totalCount >= 5) : targetStudents.filter(s => s.totalCount === fCount);
+            }
+
+            if (targetStudents.length === 0) {
+                emptyMsg.classList.remove('hidden');
+                tbody.parentNode.classList.add('hidden'); 
+                return;
+            } else {
+                emptyMsg.classList.add('hidden');
+                tbody.parentNode.classList.remove('hidden');
+            }
+
+            targetStudents.sort((a, b) => a.id.localeCompare(b.id));
+
+            targetStudents.forEach(s => {
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-50 transition";
+                
+                let countBadgeClass = "bg-slate-100 text-slate-700";
+                if (s.effectiveCount >= 5) countBadgeClass = "bg-red-100 text-red-700 font-bold";
+                else if (s.effectiveCount === 4) countBadgeClass = "bg-orange-100 text-orange-700 font-bold";
+                else if (s.effectiveCount === 3) countBadgeClass = "bg-yellow-100 text-yellow-700 font-bold";
+
+                tr.innerHTML = `
+                    <td class="px-4 py-3 text-center text-slate-600">${s.grade}</td>
+                    <td class="px-4 py-3 text-center text-slate-600">${s.classNum}</td>
+                    <td class="px-4 py-3 text-center text-slate-600">${s.num}</td>
+                    <td class="px-4 py-3 font-bold text-slate-900">${s.name}</td>
+                    <td class="px-4 py-3 text-center">
+                        <span class="px-2.5 py-1 rounded-full text-xs ${countBadgeClass}">${s.effectiveCount}회</span>
+                    </td>
+                    <td class="px-4 py-3 text-center text-slate-500 text-sm">${s.totalCount}회</td>
+                    <td class="px-4 py-3 text-center text-slate-600 text-sm">${s.latestDate}</td>
+                    <td class="px-4 py-3 text-center">
+                        <button onclick="openHistoryModal('${s.id}', '${s.name}')" class="px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 rounded-md text-xs font-semibold transition border border-indigo-200 shadow-sm">기록 보기</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function resetStudentCycle(studentId, studentName) {
+            showConfirm(`[${studentName}] 학생의 누적 횟수(5회)를 초기화하시겠습니까?\n생활교육위원회 회부 완료 시에만 진행하세요.\n(이전 기록은 삭제되지 않습니다.)`, async () => {
+                if(!state.studentCycles[studentId]) state.studentCycles[studentId] = 0;
+                state.studentCycles[studentId]++;
+                await saveState();
+                showToast("누적 횟수가 성공적으로 초기화되었습니다.");
+                renderAdminDashboard();
+            });
+        }
+
+        function renderUnreceived() {
+            const tbody = document.getElementById('unreceived-tbody');
+            const emptyMsg = document.getElementById('unreceived-empty');
+            tbody.innerHTML = '';
+            
+            const sortOption = document.getElementById('sort-unreceived') ? document.getElementById('sort-unreceived').value : 'date-asc';
+            const filterClass = document.getElementById('filter-unreceived-class') ? document.getElementById('filter-unreceived-class').value : '';
+            
+            let unreceived = state.records.filter(r => !r.received);
+            
+            if (filterClass) {
+                unreceived = unreceived.filter(r => {
+                    const student = students.find(s => s.id === r.studentId);
+                    return student && student.classNum === parseInt(filterClass);
+                });
+            }
+
+            unreceived.sort((a, b) => {
+                const dateA = new Date(a.date);
+                const dateB = new Date(b.date);
+                
+                if (sortOption === 'date-asc') {
+                    if (dateA - dateB !== 0) return dateA - dateB;
+                    if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+                    return a.studentId.localeCompare(b.studentId);
+                } else {
+                    if (a.studentId !== b.studentId) return a.studentId.localeCompare(b.studentId);
+                    if (dateA - dateB !== 0) return dateA - dateB;
+                    return a.timestamp - b.timestamp;
+                }
+            });
+
+            document.getElementById('unreceived-count').textContent = `총 ${unreceived.length}건`;
+
+            if (unreceived.length === 0) {
+                emptyMsg.classList.remove('hidden');
+                tbody.parentNode.classList.add('hidden'); 
+            } else {
+                emptyMsg.classList.add('hidden');
+                tbody.parentNode.classList.remove('hidden');
+
+                unreceived.forEach(r => {
+                    const student = students.find(s => s.id === r.studentId);
+                    const reason = r.cat2 === '기타' ? `기타(${r.otherDetail})` : r.cat2;
+                    
+                    const tr = document.createElement('tr');
+                    tr.className = "bg-white hover:bg-slate-50 transition";
+                    
+                    tr.innerHTML = `
+                        <td class="px-4 py-3 text-center text-slate-600">${student.classNum}</td>
+                        <td class="px-4 py-3 text-center text-slate-600">${student.num}</td>
+                        <td class="px-4 py-3 font-bold text-slate-900">${student.name}</td>
+                        <td class="px-4 py-3 text-center font-medium text-indigo-700">${r.date}</td>
+                        <td class="px-4 py-3 text-center text-slate-600">${r.teacherName}</td>
+                        <td class="px-4 py-3 text-slate-700 text-sm">
+                            <span class="font-semibold text-indigo-600">[${r.cat1}]</span> ${reason}
+                        </td>
+                        <td class="px-4 py-3 text-center">
+                            <button onclick="markAsReceived('${r.id}')" class="px-3 py-1.5 bg-emerald-100 text-emerald-700 hover:bg-emerald-200 text-xs rounded-lg font-bold transition shadow-sm border border-emerald-200">수합 완료</button>
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            }
+        }
+
+        function markAsReceived(recordId) {
+            const record = state.records.find(r => r.id === recordId);
+            if(record) {
+                showConfirm("해당 카드를 수합 완료 처리하시겠습니까?", async () => {
+                    record.received = true;
+                    await saveState();
+                    showToast("수합 완료 처리되었습니다.");
+                    renderUnreceived();
+                });
+            }
+        }
+
+        function renderTeachers() {
+            const list = document.getElementById('admin-teacher-list');
+            list.innerHTML = '';
+            
+            state.users.forEach(u => {
+                const li = document.createElement('li');
+                li.className = "p-4 flex justify-between items-center hover:bg-slate-50";
+                const roleBadge = u.role === 'admin' 
+                    ? '<span class="bg-indigo-100 text-indigo-800 text-xs px-2 py-0.5 rounded font-bold ml-2">관리자</span>'
+                    : '<span class="bg-slate-100 text-slate-600 text-xs px-2 py-0.5 rounded font-bold ml-2">교사</span>';
+                
+                let html = `<div><span class="font-bold text-slate-800">${u.name}</span>${roleBadge}</div>`;
+                
+                if(u.name !== '안효은') {
+                    html += `<button onclick="deleteTeacher('${u.name}')" class="text-red-500 hover:text-red-700 text-sm font-medium">삭제</button>`;
+                } else {
+                    html += `<span class="text-xs text-slate-400">삭제불가</span>`;
+                }
+                
+                li.innerHTML = html;
+                list.appendChild(li);
+            });
+        }
+
+        function deleteTeacher(name) {
+            showConfirm(`[${name}] 교사 계정을 삭제하시겠습니까?`, async () => {
+                state.users = state.users.filter(u => u.name !== name);
+                await saveState();
+                showToast("계정이 삭제되었습니다.");
+                renderTeachers();
+            });
+        }
+
+        // 앱 초기 실행 (비동기로 서버 데이터 로드)
+        window.onload = async () => {
+            await loadState();
+        };
+    </script>
+</body>
+</html>
