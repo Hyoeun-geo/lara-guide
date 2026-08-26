@@ -513,7 +513,7 @@
             // 로컬 스토리지 백업 (오프라인/에러 대비)
             localStorage.setItem('laraState_v1', JSON.stringify(state));
 
-            showLoading(true, "서버에 저장 중입니다...");
+            showLoading(true, "저장 중입니다.");
             try {
                 // CORS 문제 우회를 위해 text/plain 전송
                 await fetch(GOOGLE_APP_SCRIPT_URL, {
@@ -925,7 +925,7 @@
             document.getElementById('history-modal-title').textContent = `${studentId} ${studentName} 기록`;
             
             let html = `<div class="mb-4 text-sm bg-slate-100 p-3 rounded-lg text-slate-700">`;
-            html += `총 누적: <strong>${history.length}</strong>회 | 현재 유효 카운트: <strong class="text-indigo-600">${effectiveCount}</strong>회`;
+            html += `총 누적: <strong>${history.length}</strong>회 | 현재 누적: <strong class="text-indigo-600">${effectiveCount}</strong>회`;
             if(cycle > 0) html += ` (초기화 ${cycle}회 반영됨)`;
             html += `</div>`;
 
