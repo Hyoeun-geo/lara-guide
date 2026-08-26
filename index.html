@@ -243,6 +243,11 @@
                         <input type="text" id="cat-other" placeholder="구체적인 위반 내용을 입력하세요" class="w-full border border-slate-200 rounded-lg shadow-sm py-3 px-3 focus:ring-2 focus:ring-indigo-200 outline-none bg-white text-slate-700 text-sm">
                     </div>
 
+                    <div id="admin-teacher-input-container" class="hidden fade-in">
+                        <label class="block text-sm font-medium text-slate-400 mb-2">지도 교사 (대리 입력 시 수정 가능)</label>
+                        <input type="text" id="record-teacher" class="w-full sm:w-1/2 border border-slate-100 rounded-lg shadow-sm py-3 px-3 focus:ring-2 focus:ring-indigo-200 outline-none bg-slate-50 text-slate-700 text-sm" disabled>
+                    </div>
+
                     <div>
                         <label class="block text-sm font-medium text-slate-400 mb-2">지도 일시</label>
                         <input type="date" id="record-date" class="w-full sm:w-1/2 border border-slate-100 rounded-lg shadow-sm py-3 px-3 focus:ring-2 focus:ring-indigo-200 outline-none bg-slate-50 text-slate-700 text-sm" disabled>
@@ -686,6 +691,16 @@
             }
             
             document.getElementById('record-date').valueAsDate = new Date();
+            
+            const teacherInputContainer = document.getElementById('admin-teacher-input-container');
+            const teacherInput = document.getElementById('record-teacher');
+            
+            if (currentUser && currentUser.role === 'admin') {
+                teacherInputContainer.classList.remove('hidden');
+                teacherInput.value = currentUser.name;
+            } else {
+                teacherInputContainer.classList.add('hidden');
+            }
         }
 
         function openAdminView() {
@@ -804,11 +819,14 @@
             document.getElementById('cat1').disabled = false;
             document.getElementById('record-date').disabled = false;
             document.getElementById('record-detail').disabled = false;
+            document.getElementById('record-teacher').disabled = false;
             
-            ['cat1', 'record-date', 'record-detail'].forEach(id => {
+            ['cat1', 'record-date', 'record-detail', 'record-teacher'].forEach(id => {
                 const el = document.getElementById(id);
-                el.classList.replace('bg-slate-50', 'bg-white');
-                el.classList.replace('border-slate-100', 'border-slate-300');
+                if(el) {
+                    el.classList.replace('bg-slate-50', 'bg-white');
+                    el.classList.replace('border-slate-100', 'border-slate-300');
+                }
             });
             document.querySelectorAll('#input-container label').forEach(lbl => {
                 lbl.classList.replace('text-slate-400', 'text-slate-500');
@@ -843,11 +861,17 @@
             document.getElementById('record-detail').value = '';
             document.getElementById('record-detail').disabled = true;
             document.getElementById('record-date').disabled = true;
+            document.getElementById('record-teacher').disabled = true;
+            if (currentUser) {
+                document.getElementById('record-teacher').value = currentUser.name;
+            }
 
-            ['cat1', 'cat2', 'record-date', 'record-detail'].forEach(id => {
+            ['cat1', 'cat2', 'record-date', 'record-detail', 'record-teacher'].forEach(id => {
                 const el = document.getElementById(id);
-                el.classList.replace('bg-white', 'bg-slate-50');
-                el.classList.replace('border-slate-300', 'border-slate-100');
+                if(el) {
+                    el.classList.replace('bg-white', 'bg-slate-50');
+                    el.classList.replace('border-slate-300', 'border-slate-100');
+                }
             });
             
             document.querySelectorAll('#input-container label').forEach(lbl => {
@@ -880,6 +904,11 @@
             const date = document.getElementById('record-date').value;
             const detail = document.getElementById('record-detail').value.trim();
 
+            let teacherName = currentUser.name;
+            if (currentUser && currentUser.role === 'admin') {
+                teacherName = document.getElementById('record-teacher').value.trim() || currentUser.name;
+            }
+
             if (!cat1 || !cat2 || !date || !detail) {
                 showToast("모든 항목을 입력해주세요.");
                 return;
@@ -892,7 +921,7 @@
             const record = {
                 id: Date.now().toString(),
                 studentId: selectedStudent.id,
-                teacherName: currentUser.name,
+                teacherName: teacherName,
                 date: date,
                 cat1: cat1,
                 cat2: cat2,
