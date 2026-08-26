@@ -263,11 +263,10 @@
 
         <!-- 관리자 화면 -->
         <div id="admin-screen" class="hidden h-full flex flex-col bg-slate-100 overflow-hidden">
-            <!-- 관리자 탭 -->
+            <!-- 관리자 탭 (교사 계정 관리 탭 삭제됨) -->
             <div class="bg-white border-b border-slate-200 shadow-sm flex px-4 gap-2 flex-shrink-0 overflow-x-auto">
                 <button onclick="switchAdminTab('dashboard')" id="admin-tab-dashboard" class="px-5 py-4 font-semibold text-sm border-b-2 border-indigo-700 text-indigo-700 whitespace-nowrap">누적 현황 관리</button>
                 <button onclick="switchAdminTab('unreceived')" id="admin-tab-unreceived" class="px-5 py-4 font-semibold text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700 whitespace-nowrap">미수합 성찰카드</button>
-                <button onclick="switchAdminTab('teachers')" id="admin-tab-teachers" class="px-5 py-4 font-semibold text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700 whitespace-nowrap">교사 계정 관리</button>
             </div>
 
             <!-- 관리자 컨텐츠 영역 -->
@@ -419,7 +418,7 @@
                                         <th class="px-4 py-3">이름</th>
                                         <th class="px-4 py-3 text-center">지도일자</th>
                                         <th class="px-4 py-3 text-center">지도교사</th>
-                                        <th class="px-4 py-3">사유 (1차/2차)</th>
+                                        <th class="px-4 py-3">사유</th> <!-- 1차/2차 텍스트 삭제 완료 -->
                                         <th class="px-4 py-3 text-center">수합확인</th>
                                     </tr>
                                 </thead>
@@ -428,19 +427,6 @@
                                 </tbody>
                             </table>
                             <div id="unreceived-empty" class="hidden text-center py-10 text-slate-400 bg-white">모든 성찰카드가 수합되었습니다.</div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- 탭 3: 교사 관리 -->
-                <div id="admin-view-teachers" class="hidden fade-in">
-                    <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 max-w-2xl">
-                        <h2 class="font-bold text-slate-800 text-lg mb-1">등록된 교사 계정</h2>
-                        <p class="text-sm text-slate-500 mb-4">시스템에 접근 권한이 있는 교사 목록입니다.</p>
-                        <div class="border border-slate-200 rounded-lg overflow-hidden">
-                            <ul id="admin-teacher-list" class="divide-y divide-slate-200">
-                                <!-- 동적 렌더링 -->
-                            </ul>
                         </div>
                     </div>
                 </div>
@@ -632,7 +618,8 @@
                 return;
             }
             
-            if (user.pin === pin) {
+            // 데이터 타입 충돌 방지를 위해 무조건 String으로 형변환하여 비교 (수정 완료)
+            if (String(user.pin) === String(pin)) {
                 currentUser = user;
                 document.getElementById('login-pin').value = '';
                 enterApp();
@@ -707,10 +694,8 @@
             
             if (currentUser.role === 'admin') {
                 document.getElementById('admin-tab-unreceived').classList.remove('hidden');
-                document.getElementById('admin-tab-teachers').classList.remove('hidden');
             } else {
                 document.getElementById('admin-tab-unreceived').classList.add('hidden');
-                document.getElementById('admin-tab-teachers').classList.add('hidden');
             }
             
             switchAdminTab('dashboard');
@@ -875,11 +860,13 @@
         }
 
         function getStudentHistory(studentId) {
-            return state.records.filter(r => r.studentId === studentId).sort((a,b) => new Date(b.date) - new Date(a.date) || b.timestamp - a.timestamp);
+            // String 강제 변환 적용
+            return state.records.filter(r => String(r.studentId) === String(studentId)).sort((a,b) => new Date(b.date) - new Date(a.date) || b.timestamp - a.timestamp);
         }
 
         function getStudentEffectiveCount(studentId) {
-            const total = state.records.filter(r => r.studentId === studentId).length;
+            // String 강제 변환 적용
+            const total = state.records.filter(r => String(r.studentId) === String(studentId)).length;
             const cycle = state.studentCycles[studentId] || 0;
             return Math.max(0, total - (cycle * 5));
         }
@@ -953,18 +940,28 @@
                         ? `<span class="bg-green-100 text-green-700 px-2 py-0.5 rounded text-xs">수합됨</span>`
                         : `<span class="bg-red-100 text-red-700 px-2 py-0.5 rounded text-xs">미수합</span>`;
                     
+                    // 권한 체크: 관리자이거나 작성자 본인일 때만 수정/삭제 버튼 노출 (수정 완료)
+                    const canEdit = currentUser && (currentUser.role === 'admin' || r.teacherName === currentUser.name);
+                    let actionHtml = '';
+                    if (canEdit) {
+                        actionHtml = `
+                            <div class="opacity-0 group-hover:opacity-100 transition flex items-center gap-2">
+                                <button onclick="openEditModal('${r.id}', '${studentId}', '${studentName}')" class="text-xs text-slate-400 hover:text-indigo-600 transition font-semibold">수정</button>
+                                <button onclick="deleteRecord('${r.id}', '${studentId}', '${studentName}')" class="text-xs text-slate-400 hover:text-red-600 transition font-semibold">삭제</button>
+                            </div>
+                        `;
+                    }
+                    
+                    // 날짜 형식 .substring(0, 10) 적용 (수정 완료)
                     html += `
                         <div class="border border-slate-200 rounded-lg p-4 bg-white relative group">
                             <div class="absolute top-4 right-4 flex items-center gap-3">
                                 ${badge}
-                                <div class="opacity-0 group-hover:opacity-100 transition flex items-center gap-2">
-                                    <button onclick="openEditModal('${r.id}', '${studentId}', '${studentName}')" class="text-xs text-slate-400 hover:text-indigo-600 transition font-semibold">수정</button>
-                                    <button onclick="deleteRecord('${r.id}', '${studentId}', '${studentName}')" class="text-xs text-slate-400 hover:text-red-600 transition font-semibold">삭제</button>
-                                </div>
+                                ${actionHtml}
                             </div>
                             <div class="flex items-center gap-2 mb-2">
                                 <span class="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">${cardNum}</span>
-                                <span class="text-sm font-semibold text-slate-500">${r.date}</span>
+                                <span class="text-sm font-semibold text-slate-500">${String(r.date).substring(0, 10)}</span>
                                 <span class="text-sm text-slate-400">| 지도: ${r.teacherName} 선생님</span>
                             </div>
                             <div class="mb-2">
@@ -988,7 +985,8 @@
 
         function deleteRecord(recordId, studentId, studentName) {
             showConfirm('해당 성찰카드 기록을 정말 삭제하시겠습니까?', async () => {
-                state.records = state.records.filter(r => r.id !== recordId);
+                // String 강제 변환 적용하여 삭제 오류 해결 (수정 완료)
+                state.records = state.records.filter(r => String(r.id) !== String(recordId));
                 await saveState();
                 showToast('기록이 성공적으로 삭제되었습니다.');
                 
@@ -1004,7 +1002,8 @@
         }
 
         function openEditModal(recordId, sId, sName) {
-            const record = state.records.find(r => r.id === recordId);
+            // String 강제 변환 적용하여 수정 오류 해결 (수정 완료)
+            const record = state.records.find(r => String(r.id) === String(recordId));
             if(!record) return;
 
             currentEditRecordId = recordId;
@@ -1031,7 +1030,7 @@
                 document.getElementById('edit-cat-other').value = '';
             }
 
-            document.getElementById('edit-record-date').value = record.date;
+            document.getElementById('edit-record-date').value = String(record.date).substring(0, 10);
             document.getElementById('edit-record-detail').value = record.detail;
 
             document.getElementById('edit-modal').classList.remove('hidden');
@@ -1085,7 +1084,8 @@
                 return;
             }
 
-            const record = state.records.find(r => r.id === currentEditRecordId);
+            // String 강제 변환 적용 (수정 완료)
+            const record = state.records.find(r => String(r.id) === String(currentEditRecordId));
             if(record) {
                 record.cat1 = cat1;
                 record.cat2 = cat2;
@@ -1113,7 +1113,8 @@
 
         // --- 관리자 뷰 로직 ---
         function switchAdminTab(tab) {
-            ['dashboard', 'unreceived', 'teachers'].forEach(t => {
+            // 교사 계정 관리(teachers) 탭 삭제 반영
+            ['dashboard', 'unreceived'].forEach(t => {
                 const btn = document.getElementById(`admin-tab-${t}`);
                 const view = document.getElementById(`admin-view-${t}`);
                 if (t === tab) {
@@ -1127,7 +1128,6 @@
 
             if (tab === 'dashboard') renderAdminDashboard();
             if (tab === 'unreceived') renderUnreceived();
-            if (tab === 'teachers') renderTeachers();
         }
 
         function renderAdminDashboard() {
@@ -1226,6 +1226,7 @@
                 else if (s.effectiveCount === 4) countBadgeClass = "bg-orange-100 text-orange-700 font-bold";
                 else if (s.effectiveCount === 3) countBadgeClass = "bg-yellow-100 text-yellow-700 font-bold";
 
+                // 날짜 형식 .substring(0, 10) 적용 (이전 답변에서 안내했던 내용 유지)
                 tr.innerHTML = `
                     <td class="px-4 py-3 text-center text-slate-600">${s.grade}</td>
                     <td class="px-4 py-3 text-center text-slate-600">${s.classNum}</td>
@@ -1266,7 +1267,7 @@
             
             if (filterClass) {
                 unreceived = unreceived.filter(r => {
-                    const student = students.find(s => s.id === r.studentId);
+                    const student = students.find(s => String(s.id) === String(r.studentId));
                     return student && student.classNum === parseInt(filterClass);
                 });
             }
@@ -1278,9 +1279,9 @@
                 if (sortOption === 'date-asc') {
                     if (dateA - dateB !== 0) return dateA - dateB;
                     if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
-                    return a.studentId.localeCompare(b.studentId);
+                    return String(a.studentId).localeCompare(String(b.studentId));
                 } else {
-                    if (a.studentId !== b.studentId) return a.studentId.localeCompare(b.studentId);
+                    if (a.studentId !== b.studentId) return String(a.studentId).localeCompare(String(b.studentId));
                     if (dateA - dateB !== 0) return dateA - dateB;
                     return a.timestamp - b.timestamp;
                 }
@@ -1296,17 +1297,18 @@
                 tbody.parentNode.classList.remove('hidden');
 
                 unreceived.forEach(r => {
-                    const student = students.find(s => s.id === r.studentId);
+                    const student = students.find(s => String(s.id) === String(r.studentId));
                     const reason = r.cat2 === '기타' ? `기타(${r.otherDetail})` : r.cat2;
                     
                     const tr = document.createElement('tr');
                     tr.className = "bg-white hover:bg-slate-50 transition";
                     
+                    // 날짜 형식 .substring(0, 10) 적용하여 시간 텍스트 숨김 (수정 완료)
                     tr.innerHTML = `
                         <td class="px-4 py-3 text-center text-slate-600">${student.classNum}</td>
                         <td class="px-4 py-3 text-center text-slate-600">${student.num}</td>
                         <td class="px-4 py-3 font-bold text-slate-900">${student.name}</td>
-                        <td class="px-4 py-3 text-center font-medium text-indigo-700">${r.date}</td>
+                        <td class="px-4 py-3 text-center font-medium text-indigo-700">${String(r.date).substring(0, 10)}</td>
                         <td class="px-4 py-3 text-center text-slate-600">${r.teacherName}</td>
                         <td class="px-4 py-3 text-slate-700 text-sm">
                             <span class="font-semibold text-indigo-600">[${r.cat1}]</span> ${reason}
@@ -1321,7 +1323,8 @@
         }
 
         function markAsReceived(recordId) {
-            const record = state.records.find(r => r.id === recordId);
+            // String 강제 변환 적용하여 버튼 안 눌림 오류 해결 (수정 완료)
+            const record = state.records.find(r => String(r.id) === String(recordId));
             if(record) {
                 showConfirm("해당 카드를 수합 완료 처리하시겠습니까?", async () => {
                     record.received = true;
@@ -1330,39 +1333,6 @@
                     renderUnreceived();
                 });
             }
-        }
-
-        function renderTeachers() {
-            const list = document.getElementById('admin-teacher-list');
-            list.innerHTML = '';
-            
-            state.users.forEach(u => {
-                const li = document.createElement('li');
-                li.className = "p-4 flex justify-between items-center hover:bg-slate-50";
-                const roleBadge = u.role === 'admin' 
-                    ? '<span class="bg-indigo-100 text-indigo-800 text-xs px-2 py-0.5 rounded font-bold ml-2">관리자</span>'
-                    : '<span class="bg-slate-100 text-slate-600 text-xs px-2 py-0.5 rounded font-bold ml-2">교사</span>';
-                
-                let html = `<div><span class="font-bold text-slate-800">${u.name}</span>${roleBadge}</div>`;
-                
-                if(u.name !== '안효은') {
-                    html += `<button onclick="deleteTeacher('${u.name}')" class="text-red-500 hover:text-red-700 text-sm font-medium">삭제</button>`;
-                } else {
-                    html += `<span class="text-xs text-slate-400">삭제불가</span>`;
-                }
-                
-                li.innerHTML = html;
-                list.appendChild(li);
-            });
-        }
-
-        function deleteTeacher(name) {
-            showConfirm(`[${name}] 교사 계정을 삭제하시겠습니까?`, async () => {
-                state.users = state.users.filter(u => u.name !== name);
-                await saveState();
-                showToast("계정이 삭제되었습니다.");
-                renderTeachers();
-            });
         }
 
         // 앱 초기 실행 (비동기로 서버 데이터 로드)
