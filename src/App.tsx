@@ -57,7 +57,8 @@ export default function App() {
     show: boolean;
     studentId: string;
     studentName: string;
-  }>({ show: false, studentId: '', studentName: '' });
+    tab: 'grouped' | 'all';
+  }>({ show: false, studentId: '', studentName: '', tab: 'grouped' });
 
   const [editModal, setEditModal] = useState<{
     show: boolean;
@@ -327,12 +328,18 @@ export default function App() {
     });
   };
 
+  const isAdmin = useMemo(() => {
+    if (!currentUser) return false;
+    return currentUser.role === 'admin' || ADMIN_USERS.includes(currentUser.name);
+  }, [currentUser]);
+
   // History & Edit / Delete Record
   const openHistoryModal = (studentId: string, studentName: string) => {
     setHistoryModal({
       show: true,
       studentId,
       studentName,
+      tab: 'grouped',
     });
   };
 
@@ -665,8 +672,10 @@ export default function App() {
             {/* Modal Header */}
             <div className="p-5 border-b border-slate-200 flex justify-between items-center bg-red-50">
               <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-red-600 text-white flex items-center justify-center font-bold text-sm shadow-sm">
-                  생교위
+                <div className="w-9 h-9 rounded-xl bg-red-600 text-white flex items-center justify-center shadow-sm flex-shrink-0">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
+                  </svg>
                 </div>
                 <div>
                   <h3 className="text-lg font-bold text-red-950">
@@ -749,20 +758,20 @@ export default function App() {
                       여태 발급된 성찰카드 중 이번 생교위 안건으로 회부할 카드를 선택하세요. (총 {getStudentHistory(referralModal.student.id).length}건 중 <strong className="text-red-600">{referralModal.selectedCardIds.length}건</strong> 선택됨)
                     </p>
                   </div>
-                  <div className="flex items-center gap-1.5 text-xs">
+                  <div className="flex items-center gap-1.5 text-xs flex-shrink-0 self-end sm:self-center">
                     <button
                       type="button"
                       onClick={() => handleSelectAllCards(getStudentHistory(referralModal.student!.id).map((c) => c.id))}
-                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-medium transition"
+                      className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold transition text-center leading-tight border border-slate-200 shadow-2xs whitespace-nowrap"
                     >
-                      전체 선택
+                      전체<br />선택
                     </button>
                     <button
                       type="button"
                       onClick={handleDeselectAllCards}
-                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded font-medium transition"
+                      className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold transition text-center leading-tight border border-slate-200 shadow-2xs whitespace-nowrap"
                     >
-                      선택 해제
+                      선택<br />해제
                     </button>
                   </div>
                 </div>
@@ -975,151 +984,389 @@ export default function App() {
       )}
 
       {/* History Modal */}
-      {historyModal.show && (
-        <div id="history-modal" className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4 fade-in">
-          <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
-            <div className="p-5 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-xl">
-              <h3 className="text-xl font-bold text-slate-800" id="history-modal-title">
-                {historyModal.studentId} {historyModal.studentName} 기록
-              </h3>
-              <button
-                type="button"
-                onClick={() => setHistoryModal((prev) => ({ ...prev, show: false }))}
-                className="text-slate-400 hover:text-slate-600"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-            <div className="p-5 overflow-y-auto flex-1 space-y-4" id="history-modal-content">
-              {/* Summary stats */}
-              <div className="text-sm bg-slate-100 p-3 rounded-lg text-slate-700 flex flex-wrap items-center gap-2">
-                <span>
-                  총 누적: <strong>{getStudentHistory(historyModal.studentId).length}</strong>회
-                </span>
-                <span>|</span>
-                <span>
-                  현재 누적:{' '}
-                  <strong className="text-indigo-600">
-                    {getStudentEffectiveCount(historyModal.studentId)}
-                  </strong>
-                  회
-                </span>
-                {(state.studentCycles[historyModal.studentId] || 0) > 0 && (
-                  <span className="text-red-600 font-medium">
-                    (초기화 {state.studentCycles[historyModal.studentId]}회 반영됨)
-                  </span>
-                )}
+      {historyModal.show && (() => {
+        const modalStudentHistory = getStudentHistory(historyModal.studentId);
+        const modalStudentReferrals = getStudentReferrals(historyModal.studentId);
+        const cycleCount = state.studentCycles[historyModal.studentId] || 0;
+        const effectiveCount = getStudentEffectiveCount(historyModal.studentId);
+        const referredCardIdSet = new Set(
+          modalStudentReferrals.flatMap((ref) => ref.selectedCardIds || [])
+        );
+        const activeCards = modalStudentHistory.filter((c) => !referredCardIdSet.has(c.id));
+
+        return (
+          <div id="history-modal" className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4 fade-in">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden">
+              {/* Modal Header */}
+              <div className="p-5 border-b border-slate-200 flex justify-between items-center bg-slate-50">
+                <div>
+                  <h3 className="text-xl font-bold text-slate-800" id="history-modal-title">
+                    {historyModal.studentId} {historyModal.studentName} 기록
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    학생 지도 이력 및 생활교육위원회 회부 기록
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setHistoryModal((prev) => ({ ...prev, show: false }))}
+                  className="text-slate-400 hover:text-slate-600 p-1"
+                >
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
               </div>
 
-              {/* NEW: 생활교육위원회 회부 이력 섹션 */}
-              {getStudentReferrals(historyModal.studentId).length > 0 && (
-                <div className="bg-red-50/80 border border-red-200 rounded-xl p-4 space-y-2.5">
-                  <h4 className="text-xs font-bold text-red-900 flex items-center gap-1.5 uppercase tracking-wide">
-                    <span className="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span>
-                    생활교육위원회 회부 이력 ({getStudentReferrals(historyModal.studentId).length}건)
-                  </h4>
-                  <div className="space-y-2">
-                    {getStudentReferrals(historyModal.studentId).map((ref) => (
-                      <div key={ref.id} className="bg-white p-3 rounded-lg border border-red-100 text-xs shadow-sm">
-                        <div className="flex justify-between items-center mb-1">
-                          <span className="font-bold text-red-700 text-sm">
-                            {ref.round} 생활교육위원회
-                          </span>
-                          <span className="text-slate-500 font-medium">
-                            회부일자: {String(ref.date).substring(0, 10)}
-                          </span>
-                        </div>
-                        <div className="text-slate-700 font-medium mb-1">
-                          {ref.note}
-                        </div>
-                        <div className="text-slate-500 text-[11px] flex items-center justify-between">
-                          <span>지정 성찰카드: <strong>{ref.selectedCardIds?.length || 0}</strong>건</span>
-                          <span>처리 교사: {ref.teacherName} 선생님</span>
-                        </div>
-                      </div>
-                    ))}
+              {/* Summary stats banner */}
+              <div className="bg-slate-100 px-5 py-3 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex flex-wrap items-center gap-3 text-slate-700">
+                  <span>
+                    총 발급: <strong>{modalStudentHistory.length}</strong>회
+                  </span>
+                  <span>|</span>
+                  <span>
+                    현재 누적:{' '}
+                    <strong className="text-indigo-600 font-bold">
+                      {effectiveCount}
+                    </strong>
+                    회
+                  </span>
+                  <span>|</span>
+                  <span>
+                    생교위 회부:{' '}
+                    <strong className="text-red-600 font-bold">
+                      {modalStudentReferrals.length}
+                    </strong>
+                    건
+                  </span>
+                  {cycleCount > 0 && (
+                    <span className="text-red-600 font-medium">
+                      (초기화 {cycleCount}회 반영)
+                    </span>
+                  )}
+                </div>
+
+                {/* Tab switcher */}
+                <div className="flex items-center bg-white rounded-lg p-0.5 border border-slate-200 shadow-xs">
+                  <button
+                    type="button"
+                    onClick={() => setHistoryModal((prev) => ({ ...prev, tab: 'grouped' }))}
+                    className={`px-3 py-1 text-xs font-semibold rounded-md transition ${
+                      historyModal.tab === 'grouped'
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    생교위별 묶어보기
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setHistoryModal((prev) => ({ ...prev, tab: 'all' }))}
+                    className={`px-3 py-1 text-xs font-semibold rounded-md transition ${
+                      historyModal.tab === 'all'
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    전체 시간순
+                  </button>
+                </div>
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-5 overflow-y-auto flex-1 space-y-4" id="history-modal-content">
+                {modalStudentHistory.length === 0 ? (
+                  <div className="text-center text-slate-400 py-12 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
+                    등록된 지도 이력이 없습니다.
                   </div>
-                </div>
-              )}
+                ) : historyModal.tab === 'grouped' ? (
+                  <div className="space-y-5">
+                    {/* 생활교육위원회 회부 이력 및 관련 성찰카드 */}
+                    {modalStudentReferrals.length > 0 && (
+                      <div className="space-y-3.5">
+                        <h4 className="text-xs font-bold text-red-950 flex items-center gap-1.5 uppercase tracking-wide">
+                          <span className="w-2 h-2 rounded-full bg-red-600"></span>
+                          생활교육위원회 회부 이력 ({modalStudentReferrals.length}건)
+                        </h4>
 
-              {/* Reflection Card list */}
-              {getStudentHistory(historyModal.studentId).length === 0 ? (
-                <div className="text-center text-slate-400 py-10">등록된 지도 이력이 없습니다.</div>
-              ) : (
-                <div className="space-y-4">
-                  {getStudentHistory(historyModal.studentId).map((r, idx, arr) => {
-                    const cardNum = arr.length - idx;
-                    const reason = r.cat2 === '기타' ? `기타(${r.otherDetail})` : r.cat2;
-                    const canEdit = currentUser && (currentUser.role === 'admin' || r.teacherName === currentUser.name);
+                        {modalStudentReferrals.map((ref) => {
+                          const bundledCards = modalStudentHistory.filter((c) =>
+                            ref.selectedCardIds?.includes(c.id)
+                          );
 
-                    // Check if this card belongs to any referral
-                    const matchingReferral = (state.referrals || []).find((ref) =>
-                      String(ref.studentId) === String(historyModal.studentId) &&
-                      ref.selectedCardIds?.includes(r.id)
-                    );
+                          return (
+                            <div
+                              key={ref.id}
+                              className="border-2 border-red-200 bg-red-50/40 rounded-xl p-4 space-y-3 shadow-xs"
+                            >
+                              {/* Referral info header */}
+                              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-red-200/80 pb-2.5">
+                                <div className="flex items-center gap-2">
+                                  <span className="bg-red-600 text-white font-bold text-xs px-2.5 py-1 rounded-md shadow-xs">
+                                    {ref.round} 생활교육위원회
+                                  </span>
+                                  <span className="text-xs font-semibold text-slate-700">
+                                    회부일자: {String(ref.date).substring(0, 10)}
+                                  </span>
+                                </div>
+                                <span className="text-xs text-slate-500 font-medium">
+                                  처리 교사: <strong className="text-slate-800">{ref.teacherName}</strong> 선생님
+                                </span>
+                              </div>
 
-                    return (
-                      <div key={r.id} className="border border-slate-200 rounded-lg p-4 bg-white relative group">
-                        <div className="absolute top-4 right-4 flex items-center gap-2">
-                          {matchingReferral && (
-                            <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-xs font-bold border border-red-200">
-                              {matchingReferral.round} 생교위
-                            </span>
-                          )}
-                          {r.received ? (
-                            <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded text-xs font-semibold">
-                              수합됨
-                            </span>
-                          ) : (
-                            <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-xs font-semibold">
-                              미수합
-                            </span>
-                          )}
-                          {canEdit && (
-                            <div className="opacity-0 group-hover:opacity-100 transition flex items-center gap-2 ml-2">
-                              <button
-                                type="button"
-                                onClick={() => openEditModal(r, historyModal.studentName)}
-                                className="text-xs text-slate-400 hover:text-indigo-600 transition font-semibold"
-                              >
-                                수정
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => deleteRecord(r.id, historyModal.studentId, historyModal.studentName)}
-                                className="text-xs text-slate-400 hover:text-red-600 transition font-semibold"
-                              >
-                                삭제
-                              </button>
+                              {/* Referral note */}
+                              {ref.note && (
+                                <div className="text-xs bg-white p-3 rounded-lg border border-red-100 text-slate-700 shadow-2xs">
+                                  <span className="font-bold text-red-700 mr-1.5">[회부 안건 / 메모]</span>
+                                  {ref.note}
+                                </div>
+                              )}
+
+                              {/* Bundled Reflection Cards */}
+                              <div className="space-y-2">
+                                <div className="text-xs font-bold text-red-900 flex items-center justify-between">
+                                  <span className="flex items-center gap-1.5">
+                                    <svg className="w-3.5 h-3.5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                                    </svg>
+                                    회부 관련 성찰카드 ({bundledCards.length}건)
+                                  </span>
+                                </div>
+
+                                {bundledCards.length === 0 ? (
+                                  <div className="text-xs text-slate-400 italic bg-white/70 p-3 rounded-lg text-center border border-red-100">
+                                    지정된 성찰카드 정보가 없습니다.
+                                  </div>
+                                ) : (
+                                  <div className="space-y-2">
+                                    {bundledCards.map((card) => {
+                                      const originalIdx = modalStudentHistory.findIndex((c) => c.id === card.id);
+                                      const cardNum = modalStudentHistory.length - originalIdx;
+                                      const reason = card.cat2 === '기타' ? `기타(${card.otherDetail})` : card.cat2;
+
+                                      return (
+                                        <div
+                                          key={card.id}
+                                          className="bg-white border border-red-100/90 rounded-lg p-3 shadow-2xs"
+                                        >
+                                          <div className="flex items-center justify-between mb-1.5">
+                                            <div className="flex items-center gap-2">
+                                              <span className="bg-red-700 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold">
+                                                {cardNum}
+                                              </span>
+                                              <span className="text-xs font-semibold text-slate-700">
+                                                {String(card.date).substring(0, 10)}
+                                              </span>
+                                              <span className="text-xs text-slate-400">
+                                                | 지도: {card.teacherName} 선생님
+                                              </span>
+                                            </div>
+                                            <div className="flex items-center gap-1.5">
+                                              {card.received ? (
+                                                <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded text-[10px] font-semibold">
+                                                  수합됨
+                                                </span>
+                                              ) : (
+                                                <span className="bg-red-100 text-red-700 px-1.5 py-0.5 rounded text-[10px] font-semibold">
+                                                  미수합
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+                                          <div className="text-xs font-bold text-indigo-700 mb-1">
+                                            [{card.cat1}] {reason}
+                                          </div>
+                                          <div className="text-xs text-slate-600 bg-slate-50 p-2 rounded border border-slate-100 whitespace-pre-wrap">
+                                            {card.detail}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
                             </div>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">
-                            {cardNum}
-                          </span>
-                          <span className="text-sm font-semibold text-slate-500">
-                            {String(r.date).substring(0, 10)}
-                          </span>
-                          <span className="text-sm text-slate-400">| 지도: {r.teacherName} 선생님</span>
-                        </div>
-                        <div className="mb-2">
-                          <span className="font-bold text-indigo-700">[{r.cat1}]</span> {reason}
-                        </div>
-                        <div className="text-sm text-slate-700 bg-slate-50 p-3 rounded border border-slate-100 whitespace-pre-wrap">
-                          {r.detail}
-                        </div>
+                          );
+                        })}
                       </div>
-                    );
-                  })}
-                </div>
-              )}
+                    )}
+
+                    {/* 현재 누적 진행 중인 성찰카드 섹션 */}
+                    <div className="border border-slate-200 bg-slate-50/50 rounded-xl p-4 space-y-3">
+                      <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                        <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
+                          현재 누적 진행 중인 성찰카드 ({activeCards.length}건)
+                        </h4>
+                        <span className="text-xs text-indigo-700 font-bold">
+                          현재 누적: {effectiveCount}회
+                        </span>
+                      </div>
+
+                      {activeCards.length === 0 ? (
+                        <div className="text-xs text-slate-400 text-center py-4 bg-white rounded-lg border border-slate-100">
+                          현재 진행 중인 미회부 성찰카드가 없습니다.
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          {activeCards.map((card) => {
+                            const originalIdx = modalStudentHistory.findIndex((c) => c.id === card.id);
+                            const cardNum = modalStudentHistory.length - originalIdx;
+                            const reason = card.cat2 === '기타' ? `기타(${card.otherDetail})` : card.cat2;
+                            const canEdit =
+                              currentUser &&
+                              (currentUser.role === 'admin' || card.teacherName === currentUser.name);
+
+                            return (
+                              <div
+                                key={card.id}
+                                className="border border-slate-200 rounded-lg p-3.5 bg-white shadow-2xs relative group"
+                              >
+                                <div className="flex items-center justify-between mb-1.5">
+                                  <div className="flex items-center gap-2">
+                                    <span className="bg-indigo-600 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold">
+                                      {cardNum}
+                                    </span>
+                                    <span className="text-xs font-semibold text-slate-700">
+                                      {String(card.date).substring(0, 10)}
+                                    </span>
+                                    <span className="text-xs text-slate-400">
+                                      | 지도: {card.teacherName} 선생님
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    {card.received ? (
+                                      <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded text-[11px] font-semibold">
+                                        수합됨
+                                      </span>
+                                    ) : (
+                                      <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-[11px] font-semibold">
+                                        미수합
+                                      </span>
+                                    )}
+                                    {canEdit && (
+                                      <div className="flex items-center gap-1.5 ml-1">
+                                        <button
+                                          type="button"
+                                          onClick={() => openEditModal(card, historyModal.studentName)}
+                                          className="text-[11px] text-slate-400 hover:text-indigo-600 transition font-semibold"
+                                        >
+                                          수정
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            deleteRecord(card.id, historyModal.studentId, historyModal.studentName)
+                                          }
+                                          className="text-[11px] text-slate-400 hover:text-red-600 transition font-semibold"
+                                        >
+                                          삭제
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="text-xs font-bold text-indigo-700 mb-1">
+                                  [{card.cat1}] {reason}
+                                </div>
+                                <div className="text-xs text-slate-700 bg-slate-50 p-2.5 rounded border border-slate-100 whitespace-pre-wrap">
+                                  {card.detail}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  /* 전체 시간순 목록 */
+                  <div className="space-y-3">
+                    {modalStudentHistory.map((r, idx, arr) => {
+                      const cardNum = arr.length - idx;
+                      const reason = r.cat2 === '기타' ? `기타(${r.otherDetail})` : r.cat2;
+                      const canEdit =
+                        currentUser && (currentUser.role === 'admin' || r.teacherName === currentUser.name);
+
+                      const matchingReferral = (state.referrals || []).find(
+                        (ref) =>
+                          String(ref.studentId) === String(historyModal.studentId) &&
+                          ref.selectedCardIds?.includes(r.id)
+                      );
+
+                      return (
+                        <div
+                          key={r.id}
+                          className="border border-slate-200 rounded-lg p-4 bg-white relative group shadow-2xs"
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <span className="bg-slate-800 text-white w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold">
+                                {cardNum}
+                              </span>
+                              <span className="text-sm font-semibold text-slate-600">
+                                {String(r.date).substring(0, 10)}
+                              </span>
+                              <span className="text-sm text-slate-400">| 지도: {r.teacherName} 선생님</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              {matchingReferral ? (
+                                <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-xs font-bold border border-red-200">
+                                  {matchingReferral.round} 생교위
+                                </span>
+                              ) : (
+                                <span className="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded text-xs font-semibold border border-indigo-100">
+                                  현재 누적
+                                </span>
+                              )}
+                              {r.received ? (
+                                <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded text-xs font-semibold">
+                                  수합됨
+                                </span>
+                              ) : (
+                                <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-xs font-semibold">
+                                  미수합
+                                </span>
+                              )}
+                              {canEdit && (
+                                <div className="flex items-center gap-2 ml-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditModal(r, historyModal.studentName)}
+                                    className="text-xs text-slate-400 hover:text-indigo-600 transition font-semibold"
+                                  >
+                                    수정
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      deleteRecord(r.id, historyModal.studentId, historyModal.studentName)
+                                    }
+                                    className="text-xs text-slate-400 hover:text-red-600 transition font-semibold"
+                                  >
+                                    삭제
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="mb-2">
+                            <span className="font-bold text-indigo-700">[{r.cat1}]</span> {reason}
+                          </div>
+                          <div className="text-sm text-slate-700 bg-slate-50 p-3 rounded border border-slate-100 whitespace-pre-wrap">
+                            {r.detail}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* App Header */}
       <header className="bg-white text-slate-800 border-b border-slate-200 shadow-sm z-10 flex-shrink-0">
@@ -1676,13 +1923,15 @@ export default function App() {
                                   </span>
                                   <div className="text-xs text-slate-500 mt-1">현재 누적: {count}회</div>
                                 </div>
-                                <button
-                                  type="button"
-                                  onClick={() => openCommitteeReferralModal(student)}
-                                  className="px-2.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs rounded font-medium shadow-sm transition whitespace-nowrap cursor-pointer"
-                                >
-                                  회부 및 초기화
-                                </button>
+                                {isAdmin && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openCommitteeReferralModal(student)}
+                                    className="px-2.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs rounded font-medium shadow-sm transition whitespace-nowrap cursor-pointer"
+                                  >
+                                    회부 및 초기화
+                                  </button>
+                                )}
                               </div>
                             ))
                           )}
