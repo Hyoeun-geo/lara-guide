@@ -29,6 +29,7 @@ export interface CommitteeReferral {
   note: string;
   timestamp: number;
   teacherName: string;
+  cycleResetApplied?: boolean;
 }
 
 export interface User {

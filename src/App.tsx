@@ -25,7 +25,7 @@ export default function App() {
 
   // View state
   const [currentView, setCurrentView] = useState<'teacher' | 'admin'>('teacher');
-  const [adminTab, setAdminTab] = useState<'dashboard' | 'unreceived'>('dashboard');
+  const [adminTab, setAdminTab] = useState<'dashboard' | 'committee' | 'unreceived'>('dashboard');
 
   // Teacher entry form state
   const [selectedClass, setSelectedClass] = useState<number | ''>('');
@@ -43,8 +43,16 @@ export default function App() {
   const [filterTotalCount, setFilterTotalCount] = useState<string>('');
   const [searchStudentName, setSearchStudentName] = useState<string>('');
 
-  const [sortUnreceived, setSortUnreceived] = useState<'date-asc' | 'class-student'>('date-asc');
+  // Unreceived / receipt management states
+  const [unreceivedSubView, setUnreceivedSubView] = useState<'unreceived' | 'received' | 'all'>('unreceived');
+  const [sortUnreceived, setSortUnreceived] = useState<'date-asc' | 'date-desc' | 'class-student'>('date-asc');
   const [filterUnreceivedClass, setFilterUnreceivedClass] = useState<string>('');
+  const [searchUnreceivedText, setSearchUnreceivedText] = useState<string>('');
+  const [selectedCardActionIds, setSelectedCardActionIds] = useState<string[]>([]);
+
+  // Committee management filters
+  const [filterCommitteeClass, setFilterCommitteeClass] = useState<string>('');
+  const [searchCommitteeStudent, setSearchCommitteeStudent] = useState<string>('');
 
   // Modals state
   const [confirmModal, setConfirmModal] = useState<{
@@ -57,8 +65,7 @@ export default function App() {
     show: boolean;
     studentId: string;
     studentName: string;
-    tab: 'grouped' | 'all';
-  }>({ show: false, studentId: '', studentName: '', tab: 'grouped' });
+  }>({ show: false, studentId: '', studentName: '' });
 
   const [editModal, setEditModal] = useState<{
     show: boolean;
@@ -82,21 +89,28 @@ export default function App() {
     detail: '',
   });
 
-  // NEW: Committee Referral Modal state (생활교육위원회 회부 모달)
+  // Committee Referral Modal state (생활교육위원회 회부/수정/사안등록 모달)
   const [referralModal, setReferralModal] = useState<{
     show: boolean;
+    mode: 'create' | 'edit';
+    referralId?: string;
     student: Student | null;
     round: string;
     date: string;
     note: string;
     selectedCardIds: string[];
+    applyCycleReset: boolean;
+    directClassSelect: number | '';
   }>({
     show: false,
+    mode: 'create',
     student: null,
     round: '1차',
     date: new Date().toISOString().substring(0, 10),
     note: '',
     selectedCardIds: [],
+    applyCycleReset: true,
+    directClassSelect: '',
   });
 
   // Toast trigger
@@ -132,12 +146,58 @@ export default function App() {
       const response = await fetch(GOOGLE_APP_SCRIPT_URL);
       const data = await response.json();
       if (data && Array.isArray(data.users)) {
-        setState({
-          users: data.users || [],
-          records: data.records || [],
-          studentCycles: data.studentCycles || {},
-          referrals: data.referrals || [],
+        const users = data.users || [];
+        const records: TeacherRecord[] = data.records || [];
+        const studentCycles: Record<string, number> = data.studentCycles || {};
+        let referrals: CommitteeReferral[] = Array.isArray(data.referrals) ? data.referrals : [];
+
+        // 하위 호환성 복구: studentCycles에는 카운트가 있으나 referrals 기록이 없는 경우 자동 안건 생성/복구
+        let needSave = false;
+        Object.entries(studentCycles).forEach(([sId, cycleCount]) => {
+          if (cycleCount > 0) {
+            const existingStudentRefs = referrals.filter((r) => String(r.studentId) === String(sId));
+            if (existingStudentRefs.length < cycleCount) {
+              const targetStudent = students.find((s) => String(s.id) === String(sId));
+              const studentName = targetStudent?.name || sId;
+              const studentRecords = records
+                .filter((r) => String(r.studentId) === String(sId))
+                .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime() || a.timestamp - b.timestamp);
+
+              for (let i = existingStudentRefs.length + 1; i <= cycleCount; i++) {
+                const startIndex = (i - 1) * 5;
+                const associatedCards = studentRecords.slice(startIndex, startIndex + 5).map((c) => c.id);
+                const latestCardDate = studentRecords[startIndex + 4]?.date || studentRecords[studentRecords.length - 1]?.date || new Date().toISOString().substring(0, 10);
+                
+                const recoveredReferral: CommitteeReferral = {
+                  id: `recovered_${sId}_${i}_${Date.now()}`,
+                  studentId: sId,
+                  studentName: studentName,
+                  round: `${i}차`,
+                  date: String(latestCardDate).substring(0, 10),
+                  selectedCardIds: associatedCards,
+                  note: `5회 누적에 따른 제${i}차 생활교육위원회 회부 (자동 복구됨)`,
+                  timestamp: Date.now() - (cycleCount - i) * 1000,
+                  teacherName: '관리자',
+                  cycleResetApplied: true,
+                };
+                referrals.push(recoveredReferral);
+                needSave = true;
+              }
+            }
+          }
         });
+
+        const nextState = {
+          users,
+          records,
+          studentCycles,
+          referrals,
+        };
+
+        setState(nextState);
+        if (needSave) {
+          saveState(nextState);
+        }
       }
     } catch (error) {
       console.error('데이터 로드 실패:', error);
@@ -145,7 +205,51 @@ export default function App() {
       const saved = localStorage.getItem('laraState_v1');
       if (saved) {
         try {
-          setState(JSON.parse(saved));
+          const parsed = JSON.parse(saved);
+          const users = parsed.users || [];
+          const records: TeacherRecord[] = parsed.records || [];
+          const studentCycles: Record<string, number> = parsed.studentCycles || {};
+          let referrals: CommitteeReferral[] = Array.isArray(parsed.referrals) ? parsed.referrals : [];
+
+          // 로컬 데이터에서도 하위 호환 복구
+          Object.entries(studentCycles).forEach(([sId, cycleCount]) => {
+            if (cycleCount > 0) {
+              const existingStudentRefs = referrals.filter((r) => String(r.studentId) === String(sId));
+              if (existingStudentRefs.length < cycleCount) {
+                const targetStudent = students.find((s) => String(s.id) === String(sId));
+                const studentName = targetStudent?.name || sId;
+                const studentRecords = records
+                  .filter((r) => String(r.studentId) === String(sId))
+                  .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime() || a.timestamp - b.timestamp);
+
+                for (let i = existingStudentRefs.length + 1; i <= cycleCount; i++) {
+                  const startIndex = (i - 1) * 5;
+                  const associatedCards = studentRecords.slice(startIndex, startIndex + 5).map((c) => c.id);
+                  const latestCardDate = studentRecords[startIndex + 4]?.date || studentRecords[studentRecords.length - 1]?.date || new Date().toISOString().substring(0, 10);
+                  
+                  referrals.push({
+                    id: `recovered_${sId}_${i}_${Date.now()}`,
+                    studentId: sId,
+                    studentName: studentName,
+                    round: `${i}차`,
+                    date: String(latestCardDate).substring(0, 10),
+                    selectedCardIds: associatedCards,
+                    note: `5회 누적에 따른 제${i}차 생활교육위원회 회부 (자동 복구됨)`,
+                    timestamp: Date.now() - (cycleCount - i) * 1000,
+                    teacherName: '관리자',
+                    cycleResetApplied: true,
+                  });
+                }
+              }
+            }
+          });
+
+          setState({
+            users,
+            records,
+            studentCycles,
+            referrals,
+          });
         } catch (e) {
           console.error(e);
         }
@@ -339,7 +443,6 @@ export default function App() {
       show: true,
       studentId,
       studentName,
-      tab: 'grouped',
     });
   };
 
@@ -405,9 +508,26 @@ export default function App() {
     setEditModal((prev) => ({ ...prev, show: false }));
   };
 
-  // Mark card as received
+  // ============================================================================
+  // 성찰카드 수합(미수합/수합완료) 처리 & 일괄 처리 핸들러
+  // ============================================================================
+  const toggleSelectCardAction = (id: string) => {
+    setSelectedCardActionIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
+
+  const selectAllReceiptCards = (ids: string[]) => {
+    setSelectedCardActionIds(ids);
+  };
+
+  const deselectAllReceiptCards = () => {
+    setSelectedCardActionIds([]);
+  };
+
+  // Mark single card as received
   const markAsReceived = (recordId: string) => {
-    triggerConfirm('해당 카드를 수합 완료 처리하시겠습니까?', async () => {
+    triggerConfirm('해당 성찰카드를 수합 완료 처리하시겠습니까?', async () => {
       const nextRecords = state.records.map((r) => {
         if (String(r.id) === String(recordId)) {
           return { ...r, received: true };
@@ -420,13 +540,87 @@ export default function App() {
       };
       setState(nextState);
       await saveState(nextState);
+      setSelectedCardActionIds((prev) => prev.filter((id) => id !== recordId));
       showToast('수합 완료 처리되었습니다.');
     });
   };
 
+  // Mark single card as unreceived (수합 취소)
+  const markAsUnreceived = (recordId: string) => {
+    triggerConfirm('해당 성찰카드를 수합 취소(미수합으로 복원)하시겠습니까?', async () => {
+      const nextRecords = state.records.map((r) => {
+        if (String(r.id) === String(recordId)) {
+          return { ...r, received: false };
+        }
+        return r;
+      });
+      const nextState: AppState = {
+        ...state,
+        records: nextRecords,
+      };
+      setState(nextState);
+      await saveState(nextState);
+      setSelectedCardActionIds((prev) => prev.filter((id) => id !== recordId));
+      showToast('미수합 상태로 변경되었습니다.');
+    });
+  };
+
+  // Batch mark selected as received
+  const batchMarkAsReceived = () => {
+    if (selectedCardActionIds.length === 0) {
+      showToast('수합 처리할 성찰카드를 1개 이상 선택해주세요.');
+      return;
+    }
+    const count = selectedCardActionIds.length;
+    triggerConfirm(`선택하신 ${count}건의 성찰카드를 일괄 [수합 완료] 처리하시겠습니까?`, async () => {
+      const selectedSet = new Set(selectedCardActionIds);
+      const nextRecords = state.records.map((r) => {
+        if (selectedSet.has(r.id)) {
+          return { ...r, received: true };
+        }
+        return r;
+      });
+      const nextState: AppState = {
+        ...state,
+        records: nextRecords,
+      };
+      setState(nextState);
+      await saveState(nextState);
+      setSelectedCardActionIds([]);
+      showToast(`${count}건의 성찰카드가 일괄 수합 완료 처리되었습니다.`);
+    });
+  };
+
+  // Batch mark selected as unreceived
+  const batchMarkAsUnreceived = () => {
+    if (selectedCardActionIds.length === 0) {
+      showToast('미수합으로 전환할 성찰카드를 1개 이상 선택해주세요.');
+      return;
+    }
+    const count = selectedCardActionIds.length;
+    triggerConfirm(`선택하신 ${count}건의 성찰카드를 일괄 [수합 취소(미수합 복원)] 처리하시겠습니까?`, async () => {
+      const selectedSet = new Set(selectedCardActionIds);
+      const nextRecords = state.records.map((r) => {
+        if (selectedSet.has(r.id)) {
+          return { ...r, received: false };
+        }
+        return r;
+      });
+      const nextState: AppState = {
+        ...state,
+        records: nextRecords,
+      };
+      setState(nextState);
+      await saveState(nextState);
+      setSelectedCardActionIds([]);
+      showToast(`${count}건의 성찰카드가 미수합 상태로 복원되었습니다.`);
+    });
+  };
+
   // ============================================================================
-  // NEW FEATURE: 5회 누적시 생활교육위원회 회부 처리 모달 열기 & 처리
+  // 생활교육위원회 회부 / 수정 / 삭제 / 직권 안건 등록 핸들러
   // ============================================================================
+  // 1. 5회 누적 학생에 대한 회부 모달 열기
   const openCommitteeReferralModal = (student: Student) => {
     const studentHistory = getStudentHistory(student.id);
     const existingReferrals = getStudentReferrals(student.id);
@@ -447,12 +641,90 @@ export default function App() {
 
     setReferralModal({
       show: true,
+      mode: 'create',
       student,
       round: roundText,
       date: new Date().toISOString().substring(0, 10),
       note: `5회 누적에 따른 제${roundText} 생활교육위원회 회부`,
       selectedCardIds: initialSelectedIds,
+      applyCycleReset: true,
+      directClassSelect: student.classNum,
     });
+  };
+
+  // 2. 직권 / 사안 단독 안건 회부 모달 열기 (성찰카드 없이도 가능)
+  const openDirectCommitteeReferralModal = (initialStudent?: Student) => {
+    const defaultStudent = initialStudent || null;
+    let roundText = '1차';
+    if (defaultStudent) {
+      const nextRoundNumber = (state.studentCycles[defaultStudent.id] || 0) + 1;
+      roundText = `${nextRoundNumber}차`;
+    }
+
+    setReferralModal({
+      show: true,
+      mode: 'create',
+      student: defaultStudent,
+      round: roundText,
+      date: new Date().toISOString().substring(0, 10),
+      note: '',
+      selectedCardIds: [],
+      applyCycleReset: false,
+      directClassSelect: defaultStudent ? defaultStudent.classNum : '',
+    });
+  };
+
+  // 3. 기존 생교위 회부 안건 수정 모달 열기 (관리자 전용)
+  const openEditCommitteeReferralModal = (referral: CommitteeReferral) => {
+    const student =
+      students.find((s) => String(s.id) === String(referral.studentId)) || {
+        id: referral.studentId,
+        name: referral.studentName,
+        grade: 1,
+        classNum: parseInt(referral.studentId.substring(1, 3)) || 1,
+        num: parseInt(referral.studentId.substring(3, 5)) || 1,
+      };
+
+    setReferralModal({
+      show: true,
+      mode: 'edit',
+      referralId: referral.id,
+      student,
+      round: referral.round,
+      date: String(referral.date).substring(0, 10),
+      note: referral.note,
+      selectedCardIds: referral.selectedCardIds || [],
+      applyCycleReset: referral.cycleResetApplied ?? true,
+      directClassSelect: student.classNum,
+    });
+  };
+
+  // 4. 생교위 회부 안건 삭제 (관리자 전용)
+  const deleteCommitteeReferral = (referral: CommitteeReferral) => {
+    triggerConfirm(
+      `[${referral.studentName}] 학생의 ${referral.round} 생활교육위원회 안건 기록을 삭제하시겠습니까?${
+        referral.cycleResetApplied ? '\n(※ 이전에 차감되었던 5회 누적 초기화 카운트가 복구됩니다.)' : ''
+      }`,
+      async () => {
+        const nextReferrals = (state.referrals || []).filter((ref) => ref.id !== referral.id);
+        const nextCycles = { ...state.studentCycles };
+
+        // 만약 사이클 차감이 적용되었던 회부라면 1회 복구 (최소 0)
+        if (referral.cycleResetApplied && (nextCycles[referral.studentId] || 0) > 0) {
+          nextCycles[referral.studentId] = Math.max(0, nextCycles[referral.studentId] - 1);
+        }
+
+        const nextState: AppState = {
+          ...state,
+          referrals: nextReferrals,
+          studentCycles: nextCycles,
+        };
+
+        setState(nextState);
+        await saveState(nextState);
+        showToast('생활교육위원회 안건이 삭제되었습니다.');
+      }
+    );
   };
 
   const handleToggleCardSelection = (cardId: string) => {
@@ -480,13 +752,16 @@ export default function App() {
   };
 
   const submitCommitteeReferral = async () => {
-    if (!referralModal.student) return;
-    if (referralModal.selectedCardIds.length === 0) {
-      showToast('생교위 회부 대상 성찰카드를 1개 이상 선택해주세요.');
+    if (!referralModal.student) {
+      showToast('회부 대상 학생을 선택해주세요.');
       return;
     }
     if (!referralModal.round.trim()) {
       showToast('생교위 차수(예: 1차)를 입력해주세요.');
+      return;
+    }
+    if (!referralModal.note.trim()) {
+      showToast('회부 사유 및 안건 내용을 입력해주세요.');
       return;
     }
 
@@ -495,6 +770,47 @@ export default function App() {
       ? referralModal.round.trim()
       : `${referralModal.round.trim()}차`;
 
+    if (referralModal.mode === 'edit' && referralModal.referralId) {
+      // Edit existing referral
+      const existingRef = (state.referrals || []).find((r) => r.id === referralModal.referralId);
+      const prevApplied = existingRef?.cycleResetApplied ?? true;
+      const newApplied = referralModal.applyCycleReset;
+
+      const nextCycles = { ...state.studentCycles };
+      if (!prevApplied && newApplied) {
+        nextCycles[student.id] = (nextCycles[student.id] || 0) + 1;
+      } else if (prevApplied && !newApplied) {
+        nextCycles[student.id] = Math.max(0, (nextCycles[student.id] || 0) - 1);
+      }
+
+      const nextReferrals = (state.referrals || []).map((r) => {
+        if (r.id === referralModal.referralId) {
+          return {
+            ...r,
+            round: roundName,
+            date: referralModal.date || new Date().toISOString().substring(0, 10),
+            note: referralModal.note.trim(),
+            selectedCardIds: referralModal.selectedCardIds,
+            cycleResetApplied: referralModal.applyCycleReset,
+          };
+        }
+        return r;
+      });
+
+      const nextState: AppState = {
+        ...state,
+        studentCycles: nextCycles,
+        referrals: nextReferrals,
+      };
+
+      setState(nextState);
+      await saveState(nextState);
+      showToast(`[${student.name}] 학생의 생교위 안건이 성공적으로 수정되었습니다.`);
+      setReferralModal((prev) => ({ ...prev, show: false }));
+      return;
+    }
+
+    // Create new referral
     const newReferral: CommitteeReferral = {
       id: Date.now().toString(),
       studentId: student.id,
@@ -502,15 +818,16 @@ export default function App() {
       round: roundName,
       date: referralModal.date || new Date().toISOString().substring(0, 10),
       selectedCardIds: referralModal.selectedCardIds,
-      note: referralModal.note.trim() || `5회 누적에 따른 제${roundName} 생활교육위원회 회부`,
+      note: referralModal.note.trim(),
       timestamp: Date.now(),
       teacherName: currentUser?.name || '',
+      cycleResetApplied: referralModal.applyCycleReset,
     };
 
-    const nextCycles = {
-      ...state.studentCycles,
-      [student.id]: (state.studentCycles[student.id] || 0) + 1,
-    };
+    const nextCycles = { ...state.studentCycles };
+    if (referralModal.applyCycleReset) {
+      nextCycles[student.id] = (nextCycles[student.id] || 0) + 1;
+    }
 
     const nextReferrals = [...(state.referrals || []), newReferral];
 
@@ -523,7 +840,7 @@ export default function App() {
     setState(nextState);
     await saveState(nextState);
 
-    showToast(`[${student.name}] 학생의 ${roundName} 생활교육위원회 회부 처리 및 누적 초기화가 완료되었습니다.`);
+    showToast(`[${student.name}] 학생의 ${roundName} 생활교육위원회 안건이 등록되었습니다.`);
     setReferralModal((prev) => ({ ...prev, show: false }));
   };
 
@@ -562,9 +879,15 @@ export default function App() {
     return target.sort((a, b) => a.id.localeCompare(b.id));
   }, [students, state.records, state.studentCycles, searchStudentName, filterClass, filterCurrentCount, filterTotalCount]);
 
-  // Filtered and sorted unreceived cards
-  const unreceivedCards = useMemo(() => {
-    let list = state.records.filter((r) => !r.received);
+  // Filtered and sorted receipt cards list
+  const displayedReceiptCards = useMemo(() => {
+    let list = state.records;
+
+    if (unreceivedSubView === 'unreceived') {
+      list = list.filter((r) => !r.received);
+    } else if (unreceivedSubView === 'received') {
+      list = list.filter((r) => r.received);
+    }
 
     if (filterUnreceivedClass) {
       list = list.filter((r) => {
@@ -573,13 +896,35 @@ export default function App() {
       });
     }
 
-    list.sort((a, b) => {
+    if (searchUnreceivedText.trim()) {
+      const q = searchUnreceivedText.trim().toLowerCase();
+      list = list.filter((r) => {
+        const s = students.find((st) => String(st.id) === String(r.studentId));
+        const sName = s?.name || '';
+        const tName = r.teacherName || '';
+        const detail = r.detail || '';
+        const cat = `${r.cat1} ${r.cat2} ${r.otherDetail || ''}`;
+        return (
+          sName.toLowerCase().includes(q) ||
+          String(r.studentId).includes(q) ||
+          tName.toLowerCase().includes(q) ||
+          detail.toLowerCase().includes(q) ||
+          cat.toLowerCase().includes(q)
+        );
+      });
+    }
+
+    list = [...list].sort((a, b) => {
       const dateA = new Date(a.date).getTime();
       const dateB = new Date(b.date).getTime();
 
       if (sortUnreceived === 'date-asc') {
         if (dateA !== dateB) return dateA - dateB;
         if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
+        return String(a.studentId).localeCompare(String(b.studentId));
+      } else if (sortUnreceived === 'date-desc') {
+        if (dateA !== dateB) return dateB - dateA;
+        if (a.timestamp !== b.timestamp) return b.timestamp - a.timestamp;
         return String(a.studentId).localeCompare(String(b.studentId));
       } else {
         if (a.studentId !== b.studentId) return String(a.studentId).localeCompare(String(b.studentId));
@@ -589,7 +934,15 @@ export default function App() {
     });
 
     return list;
-  }, [state.records, filterUnreceivedClass, sortUnreceived]);
+  }, [state.records, unreceivedSubView, filterUnreceivedClass, searchUnreceivedText, sortUnreceived, students]);
+
+  const unreceivedCards = useMemo(() => {
+    return state.records.filter((r) => !r.received);
+  }, [state.records]);
+
+  const receivedCardsCount = useMemo(() => {
+    return state.records.filter((r) => r.received).length;
+  }, [state.records]);
 
   // Accumulated students lists (3, 4, 5+ counts)
   const accumulatedStudents = useMemo(() => {
@@ -606,6 +959,73 @@ export default function App() {
 
     return { list3, list4, list5 };
   }, [students, state.records, state.studentCycles]);
+
+  // Filtered and sorted Committee Referrals list for 생교위 관리 tab
+  const filteredCommitteeReferrals = useMemo(() => {
+    let list = [...(state.referrals || [])];
+
+    if (filterCommitteeClass) {
+      list = list.filter((ref) => {
+        const s = students.find((st) => String(st.id) === String(ref.studentId));
+        return s && s.classNum === parseInt(filterCommitteeClass);
+      });
+    }
+
+    if (searchCommitteeStudent.trim()) {
+      const q = searchCommitteeStudent.trim().toLowerCase();
+      list = list.filter((ref) =>
+        ref.studentName.toLowerCase().includes(q) ||
+        ref.studentId.includes(q) ||
+        ref.note.toLowerCase().includes(q) ||
+        (ref.teacherName && ref.teacherName.toLowerCase().includes(q))
+      );
+    }
+
+    // Sort by timestamp descending or date descending (latest first)
+    return list.sort((a, b) => {
+      if (b.timestamp && a.timestamp) return b.timestamp - a.timestamp;
+      return new Date(b.date).getTime() - new Date(a.date).getTime();
+    });
+  }, [state.referrals, students, filterCommitteeClass, searchCommitteeStudent]);
+
+  // Group committee referrals by round (e.g. 1차, 2차, 3차, etc.)
+  const groupedCommitteeByRound = useMemo(() => {
+    const roundOrder = ['1차', '2차', '3차', '4차', '5차'];
+    const groups: { [round: string]: CommitteeReferral[] } = {};
+
+    filteredCommitteeReferrals.forEach((ref) => {
+      const roundKey = ref.round || '기타';
+      if (!groups[roundKey]) {
+        groups[roundKey] = [];
+      }
+      groups[roundKey].push(ref);
+    });
+
+    // Sort rounds according to roundOrder then others
+    const sortedRoundKeys = Object.keys(groups).sort((a, b) => {
+      const idxA = roundOrder.indexOf(a);
+      const idxB = roundOrder.indexOf(b);
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      if (idxA !== -1) return -1;
+      if (idxB !== -1) return 1;
+      return a.localeCompare(b);
+    });
+
+    return sortedRoundKeys.map((round) => ({
+      round,
+      items: groups[round],
+    }));
+  }, [filteredCommitteeReferrals]);
+
+  // Committee statistics summary
+  const committeeStats = useMemo(() => {
+    const list = state.referrals || [];
+    const totalCount = list.length;
+    const cycleCount = list.filter((r) => r.cycleResetApplied ?? true).length;
+    const directCount = totalCount - cycleCount;
+    const uniqueStudents = new Set(list.map((r) => r.studentId)).size;
+    return { totalCount, cycleCount, directCount, uniqueStudents };
+  }, [state.referrals]);
 
   return (
     <div className="text-slate-800 antialiased h-screen flex flex-col overflow-hidden bg-slate-50">
@@ -662,28 +1082,42 @@ export default function App() {
         </div>
       )}
 
-      {/* NEW: 생활교육위원회 회부 처리 모달 */}
-      {referralModal.show && referralModal.student && (
+      {/* 생활교육위원회 회부 / 안건 등록 / 수정 모달 */}
+      {referralModal.show && (
         <div
           id="referral-modal"
           className="fixed inset-0 bg-slate-900/60 flex items-center justify-center z-[80] p-4 fade-in"
         >
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] flex flex-col overflow-hidden border border-slate-200">
             {/* Modal Header */}
-            <div className="p-5 border-b border-slate-200 flex justify-between items-center bg-red-50">
+            <div className={`p-5 border-b flex justify-between items-center ${
+              referralModal.mode === 'edit' ? 'bg-indigo-50 border-indigo-200' : 'bg-red-50 border-red-200'
+            }`}>
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-red-600 text-white flex items-center justify-center shadow-sm flex-shrink-0">
+                <div className={`w-9 h-9 rounded-xl text-white flex items-center justify-center shadow-sm flex-shrink-0 ${
+                  referralModal.mode === 'edit' ? 'bg-indigo-600' : 'bg-red-600'
+                }`}>
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
                   </svg>
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-red-950">
-                    생활교육위원회 회부 처리
+                  <h3 className={`text-lg font-bold ${
+                    referralModal.mode === 'edit' ? 'text-indigo-950' : 'text-red-950'
+                  }`}>
+                    {referralModal.mode === 'edit'
+                      ? '생활교육위원회 안건 수정'
+                      : referralModal.applyCycleReset
+                      ? '생활교육위원회 회부 처리 (5회 누적)'
+                      : '생활교육위원회 신규 안건 등록 (직권/사안)'}
                   </h3>
-                  <p className="text-xs text-red-700">
-                    대상 학생: <span className="font-bold">{referralModal.student.id} {referralModal.student.name}</span> (현재 누적 {getStudentEffectiveCount(referralModal.student.id)}회)
-                  </p>
+                  {referralModal.student ? (
+                    <p className={`text-xs ${referralModal.mode === 'edit' ? 'text-indigo-700' : 'text-red-700'}`}>
+                      대상 학생: <span className="font-bold">{referralModal.student.id} {referralModal.student.name}</span> (현재 누적 {getStudentEffectiveCount(referralModal.student.id)}회)
+                    </p>
+                  ) : (
+                    <p className="text-xs text-slate-500">회부할 학생을 선택하고 안건을 작성하세요.</p>
+                  )}
                 </div>
               </div>
               <button
@@ -699,23 +1133,86 @@ export default function App() {
 
             {/* Modal Body */}
             <div className="p-6 overflow-y-auto flex-1 space-y-5">
-              {/* 회차 및 일자 입력 */}
+              {/* 1. Student Selection (if not fixed or in direct creation mode) */}
+              {(!referralModal.student || referralModal.mode === 'create') && (
+                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                  <label className="block text-xs font-bold text-slate-700">
+                    회부 대상 학생 선택 <span className="text-red-500">*</span>
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] text-slate-500 mb-1">반 선택</label>
+                      <select
+                        value={referralModal.directClassSelect}
+                        onChange={(e) => {
+                          const cls = e.target.value ? parseInt(e.target.value) : '';
+                          setReferralModal((prev) => ({
+                            ...prev,
+                            directClassSelect: cls,
+                            student: null,
+                            selectedCardIds: [],
+                          }));
+                        }}
+                        className="w-full border border-slate-300 rounded-lg py-2 px-3 focus:ring-2 focus:ring-red-200 outline-none bg-white text-sm"
+                      >
+                        <option value="">반을 선택하세요</option>
+                        {[1, 2, 3, 4, 5, 6, 7, 8].map((c) => (
+                          <option key={c} value={c}>
+                            {c}반
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-slate-500 mb-1">학생 선택</label>
+                      <select
+                        disabled={!referralModal.directClassSelect}
+                        value={referralModal.student?.id || ''}
+                        onChange={(e) => {
+                          const sId = e.target.value;
+                          const found = students.find((s) => s.id === sId) || null;
+                          let nextRound = '1차';
+                          if (found) {
+                            nextRound = `${(state.studentCycles[found.id] || 0) + 1}차`;
+                          }
+                          setReferralModal((prev) => ({
+                            ...prev,
+                            student: found,
+                            round: nextRound,
+                            selectedCardIds: [],
+                          }));
+                        }}
+                        className="w-full border border-slate-300 rounded-lg py-2 px-3 focus:ring-2 focus:ring-red-200 outline-none bg-white text-sm disabled:bg-slate-100 disabled:opacity-70"
+                      >
+                        <option value="">학생을 선택하세요</option>
+                        {students
+                          .filter((s) => s.classNum === referralModal.directClassSelect)
+                          .map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.num}번 {s.name} (현재 {getStudentEffectiveCount(s.id)}회)
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 2. 회차 및 일자 입력 */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">
                     생교위 차수 <span className="text-red-500">*</span>
                   </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      id="referral-round-input"
-                      value={referralModal.round}
-                      onChange={(e) => setReferralModal((prev) => ({ ...prev, round: e.target.value }))}
-                      placeholder="예: 1차"
-                      className="w-full border border-slate-300 rounded-lg shadow-sm py-2 px-3 focus:ring-2 focus:ring-red-200 focus:border-red-500 outline-none bg-white text-sm font-semibold text-slate-800"
-                    />
-                  </div>
-                  <p className="text-[11px] text-slate-500 mt-1">몇 차 생활교육위원회인지 기재하세요</p>
+                  <input
+                    type="text"
+                    id="referral-round-input"
+                    value={referralModal.round}
+                    onChange={(e) => setReferralModal((prev) => ({ ...prev, round: e.target.value }))}
+                    placeholder="예: 1차"
+                    className="w-full border border-slate-300 rounded-lg shadow-sm py-2 px-3 focus:ring-2 focus:ring-red-200 focus:border-red-500 outline-none bg-white text-sm font-semibold text-slate-800"
+                  />
+                  <p className="text-[11px] text-slate-500 mt-1">해당 학생의 몇 차 생활교육위원회인지 기재하세요</p>
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">
@@ -731,117 +1228,118 @@ export default function App() {
                 </div>
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                    간단한 회부 정보 / 안건 메모
+                    회부 사유 및 안건 내용 <span className="text-red-500">*</span>
                   </label>
-                  <input
-                    type="text"
+                  <textarea
+                    rows={2}
                     id="referral-note-input"
                     value={referralModal.note}
                     onChange={(e) => setReferralModal((prev) => ({ ...prev, note: e.target.value }))}
-                    placeholder="생교위 회부 안건 및 간단한 정보를 기재하세요"
-                    className="w-full border border-slate-300 rounded-lg shadow-sm py-2 px-3 focus:ring-2 focus:ring-red-200 focus:border-red-500 outline-none bg-white text-sm"
+                    placeholder="생교위 회부 사유 및 안건 상세 내용을 기재하세요 (예: 5회 누적에 따른 회부, 또는 교권 침해 및 수업 방해 사안으로 직권 회부)"
+                    className="w-full border border-slate-300 rounded-lg shadow-sm py-2 px-3 focus:ring-2 focus:ring-red-200 focus:border-red-500 outline-none bg-white text-sm resize-none"
                   />
                 </div>
               </div>
 
-              {/* 여태 그 학생이 받았던 성찰카드 중 선택 */}
-              <div>
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-2">
-                  <div>
-                    <h4 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
-                      <svg className="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                      </svg>
-                      회부 대상 성찰카드 선택
-                    </h4>
-                    <p className="text-xs text-slate-500">
-                      여태 발급된 성찰카드 중 이번 생교위 안건으로 회부할 카드를 선택하세요. (총 {getStudentHistory(referralModal.student.id).length}건 중 <strong className="text-red-600">{referralModal.selectedCardIds.length}건</strong> 선택됨)
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1.5 text-xs flex-shrink-0 self-end sm:self-center">
-                    <button
-                      type="button"
-                      onClick={() => handleSelectAllCards(getStudentHistory(referralModal.student!.id).map((c) => c.id))}
-                      className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold transition text-center leading-tight border border-slate-200 shadow-2xs whitespace-nowrap"
-                    >
-                      전체<br />선택
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleDeselectAllCards}
-                      className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold transition text-center leading-tight border border-slate-200 shadow-2xs whitespace-nowrap"
-                    >
-                      선택<br />해제
-                    </button>
-                  </div>
-                </div>
-
-                <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-64 overflow-y-auto bg-white shadow-inner">
-                  {getStudentHistory(referralModal.student.id).length === 0 ? (
-                    <div className="text-center py-8 text-slate-400 text-sm">성찰카드 발급 기록이 없습니다.</div>
-                  ) : (
-                    getStudentHistory(referralModal.student.id).map((card, idx, arr) => {
-                      const cardNum = arr.length - idx;
-                      const isSelected = referralModal.selectedCardIds.includes(card.id);
-                      const reason = card.cat2 === '기타' ? `기타(${card.otherDetail})` : card.cat2;
-                      
-                      // Check if already in a previous referral
-                      const previousReferral = (state.referrals || []).find((ref) =>
-                        String(ref.studentId) === String(referralModal.student?.id) &&
-                        ref.selectedCardIds?.includes(card.id)
-                      );
-
-                      return (
-                        <label
-                          key={card.id}
-                          className={`flex items-start gap-3 p-3 transition cursor-pointer ${
-                            isSelected ? 'bg-red-50/70 border-l-4 border-l-red-500' : 'hover:bg-slate-50'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => handleToggleCardSelection(card.id)}
-                            className="mt-1 w-4 h-4 rounded text-red-600 focus:ring-red-500 border-slate-300 cursor-pointer"
-                          />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex flex-wrap items-center gap-2 mb-1">
-                              <span className="bg-slate-800 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold">
-                                {cardNum}
-                              </span>
-                              <span className="text-xs font-semibold text-slate-700">
-                                {String(card.date).substring(0, 10)}
-                              </span>
-                              <span className="text-xs text-slate-500">
-                                | 지도: {card.teacherName} 선생님
-                              </span>
-                              {previousReferral && (
-                                <span className="bg-purple-100 text-purple-700 text-[10px] font-bold px-2 py-0.5 rounded">
-                                  {previousReferral.round} 기회부
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-xs font-bold text-indigo-700 mb-0.5">
-                              [{card.cat1}] {reason}
-                            </div>
-                            <div className="text-xs text-slate-600 line-clamp-2 bg-slate-50 p-1.5 rounded border border-slate-100">
-                              {card.detail}
-                            </div>
-                          </div>
-                        </label>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-
-              {/* Guide Note */}
-              <div className="text-[12px] text-slate-500 bg-amber-50 p-3 rounded-lg border border-amber-200 flex items-start gap-2">
-                <span className="text-amber-600 font-bold">ℹ️</span>
+              {/* 3. 여태 그 학생이 받았던 성찰카드 중 선택 (선택 사항) */}
+              {referralModal.student && (
                 <div>
-                  <strong>회부 및 초기화 안내:</strong> 회부 처리 시 해당 학생의 현재 누적 횟수(5회)가 초기화되며, 선택한 성찰카드와 기재된 차수 정보가 생활교육위원회 회부 이력으로 영구 보관됩니다. (이전 성찰카드 기록은 삭제되지 않습니다.)
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-2">
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                        <svg className="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                        </svg>
+                        연계 성찰카드 선택 (선택 사항)
+                      </h4>
+                      <p className="text-xs text-slate-500">
+                        연관된 성찰카드가 있을 경우 선택하세요. (총 {getStudentHistory(referralModal.student.id).length}건 중 <strong className="text-red-600">{referralModal.selectedCardIds.length}건</strong> 선택됨)
+                        <br />
+                        <span className="text-slate-400">※ 성찰카드 없이 사안 자체로 회부할 경우 선택하지 않아도 됩니다.</span>
+                      </p>
+                    </div>
+                    {getStudentHistory(referralModal.student.id).length > 0 && (
+                      <div className="flex items-center gap-1.5 text-xs flex-shrink-0 self-end sm:self-center">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectAllCards(getStudentHistory(referralModal.student!.id).map((c) => c.id))}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold transition text-center leading-tight border border-slate-200 shadow-2xs whitespace-nowrap"
+                        >
+                          전체<br />선택
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleDeselectAllCards}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold transition text-center leading-tight border border-slate-200 shadow-2xs whitespace-nowrap"
+                        >
+                          선택<br />해제
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 max-h-56 overflow-y-auto bg-white shadow-inner">
+                    {getStudentHistory(referralModal.student.id).length === 0 ? (
+                      <div className="text-center py-6 text-slate-400 text-xs">
+                        발급된 성찰카드 기록이 없습니다. (단독 안건으로 등록 가능)
+                      </div>
+                    ) : (
+                      getStudentHistory(referralModal.student.id).map((card, idx, arr) => {
+                        const cardNum = arr.length - idx;
+                        const isSelected = referralModal.selectedCardIds.includes(card.id);
+                        const reason = card.cat2 === '기타' ? `기타(${card.otherDetail})` : card.cat2;
+
+                        // Check if already in another referral
+                        const previousReferral = (state.referrals || []).find((ref) =>
+                          ref.id !== referralModal.referralId &&
+                          String(ref.studentId) === String(referralModal.student?.id) &&
+                          ref.selectedCardIds?.includes(card.id)
+                        );
+
+                        return (
+                          <label
+                            key={card.id}
+                            className={`flex items-start gap-3 p-2.5 transition cursor-pointer ${
+                              isSelected ? 'bg-red-50/70 border-l-4 border-l-red-500' : 'hover:bg-slate-50'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => handleToggleCardSelection(card.id)}
+                              className="mt-1 w-4 h-4 rounded text-red-600 focus:ring-red-500 border-slate-300 cursor-pointer"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="flex flex-wrap items-center gap-2 mb-1">
+                                <span className="bg-slate-800 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold">
+                                  {cardNum}
+                                </span>
+                                <span className="text-xs font-semibold text-slate-700">
+                                  {String(card.date).substring(0, 10)}
+                                </span>
+                                <span className="text-xs text-slate-500">
+                                  | 지도: {card.teacherName} 선생님
+                                </span>
+                                {previousReferral && (
+                                  <span className="bg-purple-100 text-purple-700 text-[10px] font-bold px-2 py-0.5 rounded">
+                                    {previousReferral.round} 기회부
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-xs font-bold text-indigo-700 mb-0.5">
+                                [{card.cat1}] {reason}
+                              </div>
+                              <div className="text-xs text-slate-600 line-clamp-2 bg-slate-50 p-1.5 rounded border border-slate-100">
+                                {card.detail}
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
             {/* Modal Footer */}
@@ -856,13 +1354,22 @@ export default function App() {
               <button
                 type="button"
                 id="btn-confirm-referral"
+                disabled={!referralModal.student}
                 onClick={submitCommitteeReferral}
-                className="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold text-sm shadow-md transition flex items-center gap-1.5"
+                className={`px-5 py-2.5 rounded-lg font-bold text-sm shadow-md transition flex items-center gap-1.5 ${
+                  !referralModal.student
+                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                    : referralModal.mode === 'edit'
+                    ? 'bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer'
+                    : 'bg-red-600 hover:bg-red-700 text-white cursor-pointer'
+                }`}
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
                 </svg>
-                회부 처리 및 5회 누적 초기화
+                {referralModal.mode === 'edit'
+                  ? '안건 수정 완료'
+                  : '생활교육위원회 회부 등록'}
               </button>
             </div>
           </div>
@@ -1046,242 +1553,18 @@ export default function App() {
                     </span>
                   )}
                 </div>
-
-                {/* Tab switcher */}
-                <div className="flex items-center bg-white rounded-lg p-0.5 border border-slate-200 shadow-xs">
-                  <button
-                    type="button"
-                    onClick={() => setHistoryModal((prev) => ({ ...prev, tab: 'grouped' }))}
-                    className={`px-3 py-1 text-xs font-semibold rounded-md transition ${
-                      historyModal.tab === 'grouped'
-                        ? 'bg-indigo-600 text-white shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    생교위별 묶어보기
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setHistoryModal((prev) => ({ ...prev, tab: 'all' }))}
-                    className={`px-3 py-1 text-xs font-semibold rounded-md transition ${
-                      historyModal.tab === 'all'
-                        ? 'bg-indigo-600 text-white shadow-xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    전체 시간순
-                  </button>
+                <div className="text-slate-500 font-medium">
+                  시간순 정렬 (최신순)
                 </div>
               </div>
 
-              {/* Modal Body */}
+              {/* Modal Body: Direct Chronological List */}
               <div className="p-5 overflow-y-auto flex-1 space-y-4" id="history-modal-content">
                 {modalStudentHistory.length === 0 ? (
                   <div className="text-center text-slate-400 py-12 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">
                     등록된 지도 이력이 없습니다.
                   </div>
-                ) : historyModal.tab === 'grouped' ? (
-                  <div className="space-y-5">
-                    {/* 생활교육위원회 회부 이력 및 관련 성찰카드 */}
-                    {modalStudentReferrals.length > 0 && (
-                      <div className="space-y-3.5">
-                        <h4 className="text-xs font-bold text-red-950 flex items-center gap-1.5 uppercase tracking-wide">
-                          <span className="w-2 h-2 rounded-full bg-red-600"></span>
-                          생활교육위원회 회부 이력 ({modalStudentReferrals.length}건)
-                        </h4>
-
-                        {modalStudentReferrals.map((ref) => {
-                          const bundledCards = modalStudentHistory.filter((c) =>
-                            ref.selectedCardIds?.includes(c.id)
-                          );
-
-                          return (
-                            <div
-                              key={ref.id}
-                              className="border-2 border-red-200 bg-red-50/40 rounded-xl p-4 space-y-3 shadow-xs"
-                            >
-                              {/* Referral info header */}
-                              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-red-200/80 pb-2.5">
-                                <div className="flex items-center gap-2">
-                                  <span className="bg-red-600 text-white font-bold text-xs px-2.5 py-1 rounded-md shadow-xs">
-                                    {ref.round} 생활교육위원회
-                                  </span>
-                                  <span className="text-xs font-semibold text-slate-700">
-                                    회부일자: {String(ref.date).substring(0, 10)}
-                                  </span>
-                                </div>
-                                <span className="text-xs text-slate-500 font-medium">
-                                  처리 교사: <strong className="text-slate-800">{ref.teacherName}</strong> 선생님
-                                </span>
-                              </div>
-
-                              {/* Referral note */}
-                              {ref.note && (
-                                <div className="text-xs bg-white p-3 rounded-lg border border-red-100 text-slate-700 shadow-2xs">
-                                  <span className="font-bold text-red-700 mr-1.5">[회부 안건 / 메모]</span>
-                                  {ref.note}
-                                </div>
-                              )}
-
-                              {/* Bundled Reflection Cards */}
-                              <div className="space-y-2">
-                                <div className="text-xs font-bold text-red-900 flex items-center justify-between">
-                                  <span className="flex items-center gap-1.5">
-                                    <svg className="w-3.5 h-3.5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                                    </svg>
-                                    회부 관련 성찰카드 ({bundledCards.length}건)
-                                  </span>
-                                </div>
-
-                                {bundledCards.length === 0 ? (
-                                  <div className="text-xs text-slate-400 italic bg-white/70 p-3 rounded-lg text-center border border-red-100">
-                                    지정된 성찰카드 정보가 없습니다.
-                                  </div>
-                                ) : (
-                                  <div className="space-y-2">
-                                    {bundledCards.map((card) => {
-                                      const originalIdx = modalStudentHistory.findIndex((c) => c.id === card.id);
-                                      const cardNum = modalStudentHistory.length - originalIdx;
-                                      const reason = card.cat2 === '기타' ? `기타(${card.otherDetail})` : card.cat2;
-
-                                      return (
-                                        <div
-                                          key={card.id}
-                                          className="bg-white border border-red-100/90 rounded-lg p-3 shadow-2xs"
-                                        >
-                                          <div className="flex items-center justify-between mb-1.5">
-                                            <div className="flex items-center gap-2">
-                                              <span className="bg-red-700 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold">
-                                                {cardNum}
-                                              </span>
-                                              <span className="text-xs font-semibold text-slate-700">
-                                                {String(card.date).substring(0, 10)}
-                                              </span>
-                                              <span className="text-xs text-slate-400">
-                                                | 지도: {card.teacherName} 선생님
-                                              </span>
-                                            </div>
-                                            <div className="flex items-center gap-1.5">
-                                              {card.received ? (
-                                                <span className="bg-green-100 text-green-700 px-1.5 py-0.5 rounded text-[10px] font-semibold">
-                                                  수합됨
-                                                </span>
-                                              ) : (
-                                                <span className="bg-red-100 text-red-700 px-1.5 py-0.5 rounded text-[10px] font-semibold">
-                                                  미수합
-                                                </span>
-                                              )}
-                                            </div>
-                                          </div>
-                                          <div className="text-xs font-bold text-indigo-700 mb-1">
-                                            [{card.cat1}] {reason}
-                                          </div>
-                                          <div className="text-xs text-slate-600 bg-slate-50 p-2 rounded border border-slate-100 whitespace-pre-wrap">
-                                            {card.detail}
-                                          </div>
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    {/* 현재 누적 진행 중인 성찰카드 섹션 */}
-                    <div className="border border-slate-200 bg-slate-50/50 rounded-xl p-4 space-y-3">
-                      <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                        <h4 className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
-                          현재 누적 진행 중인 성찰카드 ({activeCards.length}건)
-                        </h4>
-                        <span className="text-xs text-indigo-700 font-bold">
-                          현재 누적: {effectiveCount}회
-                        </span>
-                      </div>
-
-                      {activeCards.length === 0 ? (
-                        <div className="text-xs text-slate-400 text-center py-4 bg-white rounded-lg border border-slate-100">
-                          현재 진행 중인 미회부 성찰카드가 없습니다.
-                        </div>
-                      ) : (
-                        <div className="space-y-3">
-                          {activeCards.map((card) => {
-                            const originalIdx = modalStudentHistory.findIndex((c) => c.id === card.id);
-                            const cardNum = modalStudentHistory.length - originalIdx;
-                            const reason = card.cat2 === '기타' ? `기타(${card.otherDetail})` : card.cat2;
-                            const canEdit =
-                              currentUser &&
-                              (currentUser.role === 'admin' || card.teacherName === currentUser.name);
-
-                            return (
-                              <div
-                                key={card.id}
-                                className="border border-slate-200 rounded-lg p-3.5 bg-white shadow-2xs relative group"
-                              >
-                                <div className="flex items-center justify-between mb-1.5">
-                                  <div className="flex items-center gap-2">
-                                    <span className="bg-indigo-600 text-white w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold">
-                                      {cardNum}
-                                    </span>
-                                    <span className="text-xs font-semibold text-slate-700">
-                                      {String(card.date).substring(0, 10)}
-                                    </span>
-                                    <span className="text-xs text-slate-400">
-                                      | 지도: {card.teacherName} 선생님
-                                    </span>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    {card.received ? (
-                                      <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded text-[11px] font-semibold">
-                                        수합됨
-                                      </span>
-                                    ) : (
-                                      <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded text-[11px] font-semibold">
-                                        미수합
-                                      </span>
-                                    )}
-                                    {canEdit && (
-                                      <div className="flex items-center gap-1.5 ml-1">
-                                        <button
-                                          type="button"
-                                          onClick={() => openEditModal(card, historyModal.studentName)}
-                                          className="text-[11px] text-slate-400 hover:text-indigo-600 transition font-semibold"
-                                        >
-                                          수정
-                                        </button>
-                                        <button
-                                          type="button"
-                                          onClick={() =>
-                                            deleteRecord(card.id, historyModal.studentId, historyModal.studentName)
-                                          }
-                                          className="text-[11px] text-slate-400 hover:text-red-600 transition font-semibold"
-                                        >
-                                          삭제
-                                        </button>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="text-xs font-bold text-indigo-700 mb-1">
-                                  [{card.cat1}] {reason}
-                                </div>
-                                <div className="text-xs text-slate-700 bg-slate-50 p-2.5 rounded border border-slate-100 whitespace-pre-wrap">
-                                  {card.detail}
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  </div>
                 ) : (
-                  /* 전체 시간순 목록 */
                   <div className="space-y-3">
                     {modalStudentHistory.map((r, idx, arr) => {
                       const cardNum = arr.length - idx;
@@ -1814,18 +2097,44 @@ export default function App() {
               >
                 누적 현황 관리
               </button>
+              <button
+                type="button"
+                id="admin-tab-committee"
+                onClick={() => setAdminTab('committee')}
+                className={`px-5 py-4 font-semibold text-sm whitespace-nowrap transition flex items-center gap-2 ${
+                  adminTab === 'committee'
+                    ? 'border-b-2 border-indigo-700 text-indigo-700'
+                    : 'border-b-2 border-transparent text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <span>생교위 관리</span>
+                {(state.referrals || []).length > 0 && (
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${
+                    adminTab === 'committee' ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-100 text-slate-600'
+                  }`}>
+                    {(state.referrals || []).length}
+                  </span>
+                )}
+              </button>
               {currentUser.role === 'admin' && (
                 <button
                   type="button"
                   id="admin-tab-unreceived"
                   onClick={() => setAdminTab('unreceived')}
-                  className={`px-5 py-4 font-semibold text-sm whitespace-nowrap transition ${
+                  className={`px-5 py-4 font-semibold text-sm whitespace-nowrap transition flex items-center gap-2 ${
                     adminTab === 'unreceived'
                       ? 'border-b-2 border-indigo-700 text-indigo-700'
                       : 'border-b-2 border-transparent text-slate-500 hover:text-slate-700'
                   }`}
                 >
-                  미수합 성찰카드
+                  <span>미수합 성찰카드</span>
+                  {unreceivedCards.length > 0 && (
+                    <span className={`text-xs px-2 py-0.5 rounded-full font-bold ${
+                      adminTab === 'unreceived' ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-600'
+                    }`}>
+                      {unreceivedCards.length}
+                    </span>
+                  )}
                 </button>
               )}
             </div>
@@ -2071,39 +2380,75 @@ export default function App() {
                 </div>
               )}
 
-              {/* TAB 2: UNRECEIVED CARDS */}
-              {adminTab === 'unreceived' && (
-                <div id="admin-view-unreceived" className="fade-in">
-                  <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
-                    <div className="flex flex-col lg:flex-row justify-between items-start lg:items-end mb-4 gap-4">
+              {/* TAB 2: COMMITTEE MANAGEMENT (생교위 관리) */}
+              {adminTab === 'committee' && (
+                <div id="admin-view-committee" className="fade-in space-y-6">
+                  {/* Top Stats Overview */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                    <div className="bg-white p-4 rounded-xl shadow-xs border border-slate-200">
+                      <div className="text-xs font-semibold text-slate-500 mb-1">총 생교위 안건</div>
+                      <div className="text-2xl font-bold text-red-600">{committeeStats.totalCount}건</div>
+                    </div>
+                    <div className="bg-white p-4 rounded-xl shadow-xs border border-slate-200">
+                      <div className="text-xs font-semibold text-slate-500 mb-1">5회 누적 연계</div>
+                      <div className="text-2xl font-bold text-amber-600">{committeeStats.cycleCount}건</div>
+                    </div>
+                    <div className="bg-white p-4 rounded-xl shadow-xs border border-slate-200">
+                      <div className="text-xs font-semibold text-slate-500 mb-1">단독/직권 사안</div>
+                      <div className="text-2xl font-bold text-indigo-600">{committeeStats.directCount}건</div>
+                    </div>
+                    <div className="bg-white p-4 rounded-xl shadow-xs border border-slate-200">
+                      <div className="text-xs font-semibold text-slate-500 mb-1">회부 대상 학생</div>
+                      <div className="text-2xl font-bold text-slate-800">{committeeStats.uniqueStudents}명</div>
+                    </div>
+                  </div>
+
+                  {/* Main Management Card */}
+                  <div className="bg-white p-5 sm:p-6 rounded-xl shadow-sm border border-slate-200">
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 border-b border-slate-200 pb-5">
                       <div>
-                        <h2 className="font-bold text-slate-800 text-lg mb-1">미수합 성찰카드 관리</h2>
-                        <p className="text-sm text-slate-500">
-                          교사가 시스템에 입력했으나, 아직 실물 일지를 제출받지 못한 목록입니다.
+                        <h2 className="font-bold text-slate-800 text-lg flex items-center gap-2">
+                          <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 6l3 1m0 0l-3 9a5.002 5.002 0 006.001 0M6 7l3 9M6 7l6-2m6 2l3-1m-3 1l-3 9a5.002 5.002 0 006.001 0M18 7l3 9m-3-9l-6-2m0-2v2m0 16V5m0 16H9m3 0h3" />
+                          </svg>
+                          생활교육위원회 회부 및 안건 관리
+                        </h2>
+                        <p className="text-sm text-slate-500 mt-1">
+                          5회 누적 연계 회부 기록 및 직권·사안별 생활교육위원회 안건을 모아서 확인하고 수정·관리할 수 있습니다.
                         </p>
                       </div>
-                      <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
-                        <div className="flex items-center gap-2">
-                          <label className="text-sm font-medium text-slate-600 whitespace-nowrap">정렬 기준:</label>
-                          <select
-                            id="sort-unreceived"
-                            value={sortUnreceived}
-                            onChange={(e) => setSortUnreceived(e.target.value as 'date-asc' | 'class-student')}
-                            className="border border-slate-300 rounded-lg py-1.5 px-2 text-sm focus:ring-indigo-500 outline-none bg-white"
-                          >
-                            <option value="date-asc">날짜순 (오래된 순)</option>
-                            <option value="class-student">반/학생순</option>
-                          </select>
+
+                      {isAdmin ? (
+                        <button
+                          type="button"
+                          id="btn-add-direct-referral"
+                          onClick={() => openDirectCommitteeReferralModal()}
+                          className="px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg font-bold text-sm shadow-sm transition flex items-center gap-2 whitespace-nowrap cursor-pointer flex-shrink-0"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
+                          </svg>
+                          신규 생교위 안건 등록
+                        </button>
+                      ) : (
+                        <div className="text-xs bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg border border-slate-200">
+                          🔒 열람 전용 (관리자만 안건 등록/수정/삭제 가능)
                         </div>
+                      )}
+                    </div>
+
+                    {/* Filter and Search Bar */}
+                    <div className="flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-3 mb-6 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                      <div className="flex flex-wrap items-center gap-3">
                         <div className="flex items-center gap-2">
-                          <label className="text-sm font-medium text-slate-600 whitespace-nowrap">반 필터:</label>
+                          <label className="text-xs font-bold text-slate-600 whitespace-nowrap">반 필터:</label>
                           <select
-                            id="filter-unreceived-class"
-                            value={filterUnreceivedClass}
-                            onChange={(e) => setFilterUnreceivedClass(e.target.value)}
-                            className="border border-slate-300 rounded-lg py-1.5 px-2 text-sm focus:ring-indigo-500 outline-none bg-white"
+                            id="filter-committee-class"
+                            value={filterCommitteeClass}
+                            onChange={(e) => setFilterCommitteeClass(e.target.value)}
+                            className="border border-slate-300 rounded-lg py-1.5 px-2.5 text-sm focus:ring-2 focus:ring-red-200 outline-none bg-white font-medium"
                           >
-                            <option value="">전체</option>
+                            <option value="">전체 반</option>
                             {[1, 2, 3, 4, 5, 6, 7, 8].map((c) => (
                               <option key={c} value={c}>
                                 {c}반
@@ -2111,57 +2456,592 @@ export default function App() {
                             ))}
                           </select>
                         </div>
-                        <span
-                          id="unreceived-count"
-                          className="text-xs font-semibold px-3 py-1.5 bg-red-100 text-red-700 rounded-lg whitespace-nowrap shadow-sm"
-                        >
-                          총 {unreceivedCards.length}건
+
+                        {(filterCommitteeClass || searchCommitteeStudent) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFilterCommitteeClass('');
+                              setSearchCommitteeStudent('');
+                            }}
+                            className="text-xs text-slate-500 hover:text-slate-700 underline font-medium px-1 cursor-pointer"
+                          >
+                            필터 초기화
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <div className="relative flex-1 sm:w-64">
+                          <input
+                            type="text"
+                            id="search-committee-student"
+                            value={searchCommitteeStudent}
+                            onChange={(e) => setSearchCommitteeStudent(e.target.value)}
+                            placeholder="학생 이름, 학번, 안건 검색..."
+                            className="w-full border border-slate-300 rounded-lg py-1.5 pl-8 pr-3 text-sm focus:ring-2 focus:ring-red-200 outline-none bg-white"
+                          />
+                          <svg
+                            className="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                          </svg>
+                        </div>
+                        <span className="text-xs font-bold px-3 py-1.5 bg-red-100 text-red-800 rounded-lg whitespace-nowrap shadow-2xs">
+                          총 {filteredCommitteeReferrals.length}건
                         </span>
                       </div>
                     </div>
 
-                    <div className="overflow-x-auto border border-slate-200 rounded-lg">
-                      {unreceivedCards.length === 0 ? (
-                        <div id="unreceived-empty" className="text-center py-10 text-slate-400 bg-white">
-                          모든 성찰카드가 수합되었습니다.
+                    {/* Committee Referral Cards Grouped by Round */}
+                    {filteredCommitteeReferrals.length === 0 ? (
+                      <div className="text-center py-16 bg-slate-50 rounded-xl border border-dashed border-slate-300">
+                        <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-3">
+                          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                          </svg>
+                        </div>
+                        <h4 className="font-bold text-slate-700 text-base mb-1">등록된 생활교육위원회 안건이 없습니다</h4>
+                        <p className="text-xs text-slate-500 max-w-md mx-auto mb-4">
+                          5회 누적 학생 회부 또는 직권/사안별 신규 안건을 등록하면 이곳에서 모아서 관리할 수 있습니다.
+                        </p>
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => openDirectCommitteeReferralModal()}
+                            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold text-xs shadow-sm transition inline-flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
+                            </svg>
+                            첫 안건 등록하기
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-6">
+                        {groupedCommitteeByRound.map((group) => (
+                          <div key={group.round} className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs bg-white">
+                            {/* Round Section Header */}
+                            <div className="bg-slate-100/80 px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <span className="px-2.5 py-1 bg-red-600 text-white text-xs font-bold rounded-md shadow-2xs">
+                                  제{group.round.replace(/[^0-9]/g, '') || group.round}차
+                                </span>
+                                <h3 className="font-bold text-slate-800 text-sm">
+                                  생활교육위원회 안건
+                                </h3>
+                              </div>
+                              <span className="text-xs font-semibold text-slate-500">
+                                대상 학생: <strong className="text-red-700 font-bold">{group.items.length}명</strong>
+                              </span>
+                            </div>
+
+                            {/* Clean Table for this Round */}
+                            <div className="overflow-x-auto">
+                              <table className="w-full text-sm text-left whitespace-nowrap">
+                                <thead className="text-xs text-slate-600 bg-slate-50 border-b border-slate-200 uppercase">
+                                  <tr>
+                                    <th className="px-4 py-3 font-semibold">학번 / 학생명</th>
+                                    <th className="px-4 py-3 text-center font-semibold">회부일자</th>
+                                    <th className="px-4 py-3 font-semibold">안건 사유 및 내용</th>
+                                    <th className="px-4 py-3 text-center font-semibold">구분</th>
+                                    {isAdmin && <th className="px-4 py-3 text-center font-semibold">관리</th>}
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100 bg-white">
+                                  {group.items.map((ref) => {
+                                    const s = students.find((st) => String(st.id) === String(ref.studentId));
+                                    const studentDisplayName = `${ref.studentId} ${s?.name || ref.studentName}`;
+                                    const isCycleReset = ref.cycleResetApplied ?? true;
+
+                                    return (
+                                      <tr key={ref.id} className="hover:bg-slate-50 transition">
+                                        {/* Student Name / ID Button */}
+                                        <td className="px-4 py-3.5">
+                                          <button
+                                            type="button"
+                                            onClick={() => openHistoryModal(ref.studentId, s?.name || ref.studentName)}
+                                            className="font-bold text-indigo-700 hover:text-indigo-900 hover:underline transition cursor-pointer text-sm flex items-center gap-1.5"
+                                            title="클릭하여 학생의 전체 성찰기록 및 상세 정보를 확인합니다"
+                                          >
+                                            <span>{studentDisplayName}</span>
+                                            <svg className="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                            </svg>
+                                          </button>
+                                        </td>
+
+                                        {/* Referral Date */}
+                                        <td className="px-4 py-3.5 text-center text-slate-600 text-xs font-medium">
+                                          {String(ref.date).substring(0, 10)}
+                                        </td>
+
+                                        {/* Note / Content */}
+                                        <td className="px-4 py-3.5 text-slate-700 text-xs max-w-md truncate" title={ref.note}>
+                                          {ref.note || '-'}
+                                        </td>
+
+                                        {/* Badge */}
+                                        <td className="px-4 py-3.5 text-center">
+                                          {isCycleReset ? (
+                                            <span className="inline-block text-[11px] font-semibold px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-200 rounded">
+                                              5회 누적 연계
+                                            </span>
+                                          ) : (
+                                            <span className="inline-block text-[11px] font-semibold px-2 py-0.5 bg-blue-50 text-blue-800 border border-blue-200 rounded">
+                                              단독/직권 사안
+                                            </span>
+                                          )}
+                                        </td>
+
+                                        {/* Admin Edit/Delete */}
+                                        {isAdmin && (
+                                          <td className="px-4 py-3.5 text-center">
+                                            <div className="flex items-center justify-center gap-1.5">
+                                              <button
+                                                type="button"
+                                                onClick={() => openEditCommitteeReferralModal(ref)}
+                                                className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded text-xs font-semibold transition cursor-pointer"
+                                              >
+                                                수정
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => deleteCommitteeReferral(ref)}
+                                                className="px-2.5 py-1 bg-white hover:bg-red-50 text-red-600 border border-red-200 rounded text-xs font-semibold transition cursor-pointer"
+                                              >
+                                                삭제
+                                              </button>
+                                            </div>
+                                          </td>
+                                        )}
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 3: UNRECEIVED / RECEIPT MANAGEMENT CARDS */}
+              {adminTab === 'unreceived' && (
+                <div id="admin-view-unreceived" className="fade-in space-y-5">
+                  {/* Top Stats Overview */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div
+                      onClick={() => setUnreceivedSubView('unreceived')}
+                      className={`p-4 rounded-xl border transition cursor-pointer ${
+                        unreceivedSubView === 'unreceived'
+                          ? 'bg-red-50/80 border-red-300 shadow-sm'
+                          : 'bg-white border-slate-200 hover:border-slate-300 shadow-2xs'
+                      }`}
+                    >
+                      <div className="text-xs font-bold text-red-600 mb-1 flex items-center justify-between">
+                        <span>미수합 성찰카드</span>
+                        <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                      </div>
+                      <div className="text-2xl font-bold text-red-700">{unreceivedCards.length}건</div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">실물 일지 미제출 상태</div>
+                    </div>
+
+                    <div
+                      onClick={() => setUnreceivedSubView('received')}
+                      className={`p-4 rounded-xl border transition cursor-pointer ${
+                        unreceivedSubView === 'received'
+                          ? 'bg-emerald-50/80 border-emerald-300 shadow-sm'
+                          : 'bg-white border-slate-200 hover:border-slate-300 shadow-2xs'
+                      }`}
+                    >
+                      <div className="text-xs font-bold text-emerald-600 mb-1 flex items-center justify-between">
+                        <span>수합 완료 성찰카드</span>
+                        <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                      </div>
+                      <div className="text-2xl font-bold text-emerald-700">{receivedCardsCount}건</div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">실물 일지 수합 확인 완료</div>
+                    </div>
+
+                    <div
+                      onClick={() => setUnreceivedSubView('all')}
+                      className={`p-4 rounded-xl border transition cursor-pointer ${
+                        unreceivedSubView === 'all'
+                          ? 'bg-indigo-50/80 border-indigo-300 shadow-sm'
+                          : 'bg-white border-slate-200 hover:border-slate-300 shadow-2xs'
+                      }`}
+                    >
+                      <div className="text-xs font-bold text-indigo-600 mb-1 flex items-center justify-between">
+                        <span>전체 발급 성찰카드</span>
+                        <span className="w-2 h-2 rounded-full bg-indigo-500"></span>
+                      </div>
+                      <div className="text-2xl font-bold text-indigo-800">{state.records.length}건</div>
+                      <div className="text-[11px] text-slate-500 mt-0.5">수합 + 미수합 전체 목록</div>
+                    </div>
+                  </div>
+
+                  {/* Main Management Card */}
+                  <div className="bg-white p-5 sm:p-6 rounded-xl shadow-sm border border-slate-200">
+                    {/* Header */}
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6 border-b border-slate-200 pb-5">
+                      <div>
+                        <h2 className="font-bold text-slate-800 text-lg flex items-center gap-2">
+                          <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                          </svg>
+                          성찰카드 수합 관리 및 일괄 처리
+                        </h2>
+                        <p className="text-sm text-slate-500 mt-1">
+                          체크박스를 선택하여 여러 성찰카드를 한꺼번에 수합 완료 처리하거나, 필요 시 수합 취소(미수합 복원)할 수 있습니다.
+                        </p>
+                      </div>
+
+                      {/* View Switcher Pills */}
+                      <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-semibold self-stretch md:self-auto">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setUnreceivedSubView('unreceived');
+                            deselectAllReceiptCards();
+                          }}
+                          className={`flex-1 md:flex-initial px-3 py-1.5 rounded-lg transition ${
+                            unreceivedSubView === 'unreceived'
+                              ? 'bg-white text-red-700 shadow-xs font-bold'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          미수합 ({unreceivedCards.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setUnreceivedSubView('received');
+                            deselectAllReceiptCards();
+                          }}
+                          className={`flex-1 md:flex-initial px-3 py-1.5 rounded-lg transition ${
+                            unreceivedSubView === 'received'
+                              ? 'bg-white text-emerald-700 shadow-xs font-bold'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          수합 완료 ({receivedCardsCount})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setUnreceivedSubView('all');
+                            deselectAllReceiptCards();
+                          }}
+                          className={`flex-1 md:flex-initial px-3 py-1.5 rounded-lg transition ${
+                            unreceivedSubView === 'all'
+                              ? 'bg-white text-indigo-700 shadow-xs font-bold'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          전체 ({state.records.length})
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Filter & Search Bar */}
+                    <div className="flex flex-col lg:flex-row justify-between items-stretch lg:items-center gap-3 mb-5 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs font-bold text-slate-600 whitespace-nowrap">반 필터:</label>
+                          <select
+                            id="filter-unreceived-class"
+                            value={filterUnreceivedClass}
+                            onChange={(e) => setFilterUnreceivedClass(e.target.value)}
+                            className="border border-slate-300 rounded-lg py-1.5 px-2.5 text-sm focus:ring-2 focus:ring-indigo-200 outline-none bg-white font-medium"
+                          >
+                            <option value="">전체 반</option>
+                            {[1, 2, 3, 4, 5, 6, 7, 8].map((c) => (
+                              <option key={c} value={c}>
+                                {c}반
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <label className="text-xs font-bold text-slate-600 whitespace-nowrap">정렬:</label>
+                          <select
+                            id="sort-unreceived"
+                            value={sortUnreceived}
+                            onChange={(e) => setSortUnreceived(e.target.value as 'date-asc' | 'date-desc' | 'class-student')}
+                            className="border border-slate-300 rounded-lg py-1.5 px-2.5 text-sm focus:ring-2 focus:ring-indigo-200 outline-none bg-white font-medium"
+                          >
+                            <option value="date-asc">날짜순 (오래된 순)</option>
+                            <option value="date-desc">날짜순 (최신순)</option>
+                            <option value="class-student">반/학생 번호순</option>
+                          </select>
+                        </div>
+
+                        {(filterUnreceivedClass || searchUnreceivedText) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setFilterUnreceivedClass('');
+                              setSearchUnreceivedText('');
+                            }}
+                            className="text-xs text-slate-500 hover:text-slate-700 underline font-medium px-1 cursor-pointer"
+                          >
+                            필터 초기화
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-3">
+                        <div className="relative flex-1 sm:w-64">
+                          <input
+                            type="text"
+                            id="search-unreceived-input"
+                            value={searchUnreceivedText}
+                            onChange={(e) => setSearchUnreceivedText(e.target.value)}
+                            placeholder="학생명, 학번, 교사명, 사유 검색..."
+                            className="w-full border border-slate-300 rounded-lg py-1.5 pl-8 pr-3 text-sm focus:ring-2 focus:ring-indigo-200 outline-none bg-white"
+                          />
+                          <svg
+                            className="w-4 h-4 text-slate-400 absolute left-2.5 top-2.5"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                          </svg>
+                        </div>
+                        <span className="text-xs font-bold px-3 py-1.5 bg-slate-100 text-slate-700 rounded-lg whitespace-nowrap shadow-2xs">
+                          조회 {displayedReceiptCards.length}건
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Batch Action Toolbar */}
+                    <div className="bg-indigo-50/70 border border-indigo-200 rounded-xl p-3 sm:p-4 mb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                          <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          선택 항목:
+                          <strong className="text-indigo-700 bg-white px-2 py-0.5 rounded border border-indigo-200">
+                            {selectedCardActionIds.length}건
+                          </strong>
+                          <span className="text-slate-500 font-normal">/ 현재 목록 {displayedReceiptCards.length}건</span>
+                        </span>
+
+                        <div className="flex items-center gap-1.5 ml-2">
+                          <button
+                            type="button"
+                            id="btn-select-all-unreceived"
+                            onClick={() => selectAllReceiptCards(displayedReceiptCards.map((c) => c.id))}
+                            className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 rounded-md text-xs font-semibold border border-slate-300 shadow-2xs transition cursor-pointer"
+                          >
+                            목록 전체 선택
+                          </button>
+                          {selectedCardActionIds.length > 0 && (
+                            <button
+                              type="button"
+                              id="btn-deselect-all-unreceived"
+                              onClick={deselectAllReceiptCards}
+                              className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-600 rounded-md text-xs font-semibold border border-slate-300 shadow-2xs transition cursor-pointer"
+                            >
+                              선택 해제
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+                        {/* Batch Receive Button */}
+                        <button
+                          type="button"
+                          id="btn-batch-mark-received"
+                          disabled={selectedCardActionIds.length === 0}
+                          onClick={batchMarkAsReceived}
+                          className={`px-4 py-2 rounded-lg font-bold text-xs shadow-sm transition flex items-center gap-1.5 cursor-pointer ${
+                            selectedCardActionIds.length > 0
+                              ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-200'
+                              : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                          }`}
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                          </svg>
+                          선택한 {selectedCardActionIds.length > 0 ? `${selectedCardActionIds.length}건 ` : ''}일괄 수합 완료
+                        </button>
+
+                        {/* Batch Unreceive Button (available in received or all views) */}
+                        {unreceivedSubView !== 'unreceived' && (
+                          <button
+                            type="button"
+                            id="btn-batch-mark-unreceived"
+                            disabled={selectedCardActionIds.length === 0}
+                            onClick={batchMarkAsUnreceived}
+                            className={`px-3.5 py-2 rounded-lg font-bold text-xs shadow-sm transition flex items-center gap-1.5 cursor-pointer ${
+                              selectedCardActionIds.length > 0
+                                ? 'bg-amber-600 hover:bg-amber-700 text-white'
+                                : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                            }`}
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                            </svg>
+                            수합 취소 (미수합 복원)
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Table View */}
+                    <div className="overflow-x-auto border border-slate-200 rounded-xl shadow-inner">
+                      {displayedReceiptCards.length === 0 ? (
+                        <div id="unreceived-empty" className="text-center py-16 text-slate-400 bg-white">
+                          <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto mb-3">
+                            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                            </svg>
+                          </div>
+                          <h4 className="font-bold text-slate-700 text-base mb-1">해당 조건의 성찰카드가 없습니다.</h4>
+                          <p className="text-xs text-slate-400">
+                            {unreceivedSubView === 'unreceived'
+                              ? '모든 성찰카드가 수합 완료되었습니다.'
+                              : '조회 조건에 맞는 항목이 없습니다.'}
+                          </p>
                         </div>
                       ) : (
                         <table className="w-full text-sm text-left whitespace-nowrap">
-                          <thead className="text-xs text-slate-600 bg-slate-100 uppercase">
+                          <thead className="text-xs text-slate-700 bg-slate-100 uppercase border-b border-slate-200">
                             <tr>
-                              <th className="px-4 py-3 text-center">반</th>
-                              <th className="px-4 py-3 text-center">번호</th>
-                              <th className="px-4 py-3">이름</th>
+                              <th className="px-3 py-3.5 text-center w-10">
+                                <input
+                                  type="checkbox"
+                                  id="checkbox-select-all-header"
+                                  checked={
+                                    displayedReceiptCards.length > 0 &&
+                                    displayedReceiptCards.every((c) => selectedCardActionIds.includes(c.id))
+                                  }
+                                  onChange={() => {
+                                    const visibleIds = displayedReceiptCards.map((c) => c.id);
+                                    const allSelected =
+                                      visibleIds.length > 0 &&
+                                      visibleIds.every((id) => selectedCardActionIds.includes(id));
+                                    if (allSelected) {
+                                      setSelectedCardActionIds((prev) =>
+                                        prev.filter((id) => !visibleIds.includes(id))
+                                      );
+                                    } else {
+                                      const newSet = new Set([...selectedCardActionIds, ...visibleIds]);
+                                      setSelectedCardActionIds(Array.from(newSet));
+                                    }
+                                  }}
+                                  className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 cursor-pointer"
+                                />
+                              </th>
+                              <th className="px-3 py-3 text-center">반</th>
+                              <th className="px-3 py-3 text-center">번호</th>
+                              <th className="px-4 py-3">학생명</th>
                               <th className="px-4 py-3 text-center">지도일자</th>
                               <th className="px-4 py-3 text-center">지도교사</th>
-                              <th className="px-4 py-3">사유</th>
-                              <th className="px-4 py-3 text-center">수합확인</th>
+                              <th className="px-4 py-3">지도영역 / 사유</th>
+                              <th className="px-4 py-3">상세 내용</th>
+                              <th className="px-4 py-3 text-center">수합 상태</th>
+                              <th className="px-4 py-3 text-center">개별 처리</th>
                             </tr>
                           </thead>
                           <tbody id="unreceived-tbody" className="divide-y divide-slate-200 bg-white">
-                            {unreceivedCards.map((r) => {
+                            {displayedReceiptCards.map((r) => {
                               const s = students.find((st) => String(st.id) === String(r.studentId));
                               const reason = r.cat2 === '기타' ? `기타(${r.otherDetail})` : r.cat2;
+                              const isSelected = selectedCardActionIds.includes(r.id);
+
                               return (
-                                <tr key={r.id} className="bg-white hover:bg-slate-50 transition">
-                                  <td className="px-4 py-3 text-center text-slate-600">{s?.classNum || '-'}</td>
-                                  <td className="px-4 py-3 text-center text-slate-600">{s?.num || '-'}</td>
-                                  <td className="px-4 py-3 font-bold text-slate-900">{s?.name || '-'}</td>
+                                <tr
+                                  key={r.id}
+                                  className={`transition ${
+                                    isSelected
+                                      ? 'bg-indigo-50/60 font-medium'
+                                      : 'hover:bg-slate-50 bg-white'
+                                  }`}
+                                >
+                                  {/* Checkbox Column */}
+                                  <td className="px-3 py-3 text-center">
+                                    <input
+                                      type="checkbox"
+                                      checked={isSelected}
+                                      onChange={() => toggleSelectCardAction(r.id)}
+                                      className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 border-slate-300 cursor-pointer"
+                                    />
+                                  </td>
+                                  <td className="px-3 py-3 text-center text-slate-600 font-semibold">{s?.classNum || '-'}반</td>
+                                  <td className="px-3 py-3 text-center text-slate-600">{s?.num || '-'}번</td>
+                                  <td className="px-4 py-3">
+                                    <button
+                                      type="button"
+                                      onClick={() => openHistoryModal(r.studentId, s?.name || '')}
+                                      className="font-bold text-slate-900 hover:text-indigo-600 transition flex items-center gap-1 cursor-pointer"
+                                      title="클릭하여 학생 기록 확인"
+                                    >
+                                      <span>{s?.name || r.studentId}</span>
+                                    </button>
+                                  </td>
                                   <td className="px-4 py-3 text-center font-medium text-indigo-700">
                                     {String(r.date).substring(0, 10)}
                                   </td>
-                                  <td className="px-4 py-3 text-center text-slate-600">{r.teacherName}</td>
-                                  <td className="px-4 py-3 text-slate-700 text-sm">
-                                    <span className="font-semibold text-indigo-600">[{r.cat1}]</span> {reason}
+                                  <td className="px-4 py-3 text-center text-slate-600">{r.teacherName} 선생님</td>
+                                  <td className="px-4 py-3 text-slate-700">
+                                    <span className="font-semibold text-indigo-700">[{r.cat1}]</span> {reason}
                                   </td>
+                                  <td className="px-4 py-3 text-slate-600 max-w-xs truncate" title={r.detail}>
+                                    {r.detail}
+                                  </td>
+                                  {/* Status Column */}
                                   <td className="px-4 py-3 text-center">
-                                    <button
-                                      type="button"
-                                      onClick={() => markAsReceived(r.id)}
-                                      className="px-3 py-1.5 bg-emerald-100 text-emerald-700 hover:bg-emerald-200 text-xs rounded-lg font-bold transition shadow-sm border border-emerald-200 cursor-pointer"
-                                    >
-                                      수합 완료
-                                    </button>
+                                    {r.received ? (
+                                      <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-800 text-xs px-2.5 py-1 rounded-full font-bold">
+                                        <svg className="w-3 h-3 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                                        </svg>
+                                        수합 완료
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 bg-red-100 text-red-800 text-xs px-2.5 py-1 rounded-full font-bold">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-red-500"></span>
+                                        미수합
+                                      </span>
+                                    )}
+                                  </td>
+                                  {/* Individual Action Column */}
+                                  <td className="px-4 py-3 text-center">
+                                    {r.received ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => markAsUnreceived(r.id)}
+                                        className="px-2.5 py-1 bg-slate-100 text-slate-600 hover:bg-amber-100 hover:text-amber-800 text-xs rounded-lg font-semibold transition border border-slate-200 cursor-pointer"
+                                        title="미수합 상태로 다시 되돌립니다"
+                                      >
+                                        수합 취소
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() => markAsReceived(r.id)}
+                                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs rounded-lg font-bold transition shadow-xs cursor-pointer flex items-center gap-1 mx-auto"
+                                      >
+                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                                        </svg>
+                                        수합 완료
+                                      </button>
+                                    )}
                                   </td>
                                 </tr>
                               );
