@@ -2,6 +2,44 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Student, TeacherRecord, CommitteeReferral, User, AppState } from './types';
 import { students, categories, ADMIN_USERS, GOOGLE_APP_SCRIPT_URL } from './data/studentsData';
 
+// Helper to get local date string YYYY-MM-DD in KST (local browser time, never UTC offset)
+export const getLocalDateString = (d: Date = new Date()): string => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+// Helper to format/normalize any date string into YYYY-MM-DD safely
+export const normalizeDate = (dateVal: any): string => {
+  if (!dateVal) return getLocalDateString();
+  if (typeof dateVal === 'string') {
+    const trimmed = dateVal.trim();
+    // 1. If already pure YYYY-MM-DD (e.g. "2026-09-01") without T or Z, preserve exact date
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return trimmed;
+    }
+    // 2. If format is "2026. 9. 1" or "2026/09/01"
+    const simpleMatch = trimmed.match(/^(\d{4})[./-](\d{1,2})[./-](\d{1,2})/);
+    if (simpleMatch && !trimmed.includes('T') && !trimmed.includes('Z')) {
+      const y = simpleMatch[1];
+      const m = simpleMatch[2].padStart(2, '0');
+      const d = simpleMatch[3].padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+    // 3. If ISO string with timezone (e.g. "2026-08-31T15:00:00.000Z") or full date string
+    const parsed = new Date(trimmed);
+    if (!isNaN(parsed.getTime())) {
+      return getLocalDateString(parsed);
+    }
+    return trimmed.substring(0, 10);
+  }
+  if (dateVal instanceof Date && !isNaN(dateVal.getTime())) {
+    return getLocalDateString(dateVal);
+  }
+  return String(dateVal).substring(0, 10);
+};
+
 export default function App() {
   // App state
   const [state, setState] = useState<AppState>({
@@ -33,7 +71,7 @@ export default function App() {
   const [cat1, setCat1] = useState('');
   const [cat2, setCat2] = useState('');
   const [catOther, setCatOther] = useState('');
-  const [recordDate, setRecordDate] = useState(() => new Date().toISOString().substring(0, 10));
+  const [recordDate, setRecordDate] = useState(() => getLocalDateString());
   const [recordDetail, setRecordDetail] = useState('');
   const [recordTeacher, setRecordTeacher] = useState('');
 
@@ -106,7 +144,7 @@ export default function App() {
     mode: 'create',
     student: null,
     round: '1차',
-    date: new Date().toISOString().substring(0, 10),
+    date: getLocalDateString(),
     note: '',
     selectedCardIds: [],
     applyCycleReset: true,
@@ -147,9 +185,15 @@ export default function App() {
       const data = await response.json();
       if (data && Array.isArray(data.users)) {
         const users = data.users || [];
-        const records: TeacherRecord[] = data.records || [];
+        const records: TeacherRecord[] = (data.records || []).map((r: any) => ({
+          ...r,
+          date: normalizeDate(r.date),
+        }));
         const studentCycles: Record<string, number> = data.studentCycles || {};
-        let referrals: CommitteeReferral[] = Array.isArray(data.referrals) ? data.referrals : [];
+        let referrals: CommitteeReferral[] = (Array.isArray(data.referrals) ? data.referrals : []).map((ref: any) => ({
+          ...ref,
+          date: normalizeDate(ref.date),
+        }));
 
         // 하위 호환성 복구: studentCycles에는 카운트가 있으나 referrals 기록이 없는 경우 자동 안건 생성/복구
         let needSave = false;
@@ -166,14 +210,14 @@ export default function App() {
               for (let i = existingStudentRefs.length + 1; i <= cycleCount; i++) {
                 const startIndex = (i - 1) * 5;
                 const associatedCards = studentRecords.slice(startIndex, startIndex + 5).map((c) => c.id);
-                const latestCardDate = studentRecords[startIndex + 4]?.date || studentRecords[studentRecords.length - 1]?.date || new Date().toISOString().substring(0, 10);
+                const latestCardDate = studentRecords[startIndex + 4]?.date || studentRecords[studentRecords.length - 1]?.date || getLocalDateString();
                 
                 const recoveredReferral: CommitteeReferral = {
                   id: `recovered_${sId}_${i}_${Date.now()}`,
                   studentId: sId,
                   studentName: studentName,
                   round: `${i}차`,
-                  date: String(latestCardDate).substring(0, 10),
+                  date: normalizeDate(latestCardDate),
                   selectedCardIds: associatedCards,
                   note: `5회 누적에 따른 제${i}차 생활교육위원회 회부 (자동 복구됨)`,
                   timestamp: Date.now() - (cycleCount - i) * 1000,
@@ -207,9 +251,15 @@ export default function App() {
         try {
           const parsed = JSON.parse(saved);
           const users = parsed.users || [];
-          const records: TeacherRecord[] = parsed.records || [];
+          const records: TeacherRecord[] = (parsed.records || []).map((r: any) => ({
+            ...r,
+            date: normalizeDate(r.date),
+          }));
           const studentCycles: Record<string, number> = parsed.studentCycles || {};
-          let referrals: CommitteeReferral[] = Array.isArray(parsed.referrals) ? parsed.referrals : [];
+          let referrals: CommitteeReferral[] = (Array.isArray(parsed.referrals) ? parsed.referrals : []).map((ref: any) => ({
+            ...ref,
+            date: normalizeDate(ref.date),
+          }));
 
           // 로컬 데이터에서도 하위 호환 복구
           Object.entries(studentCycles).forEach(([sId, cycleCount]) => {
@@ -225,14 +275,14 @@ export default function App() {
                 for (let i = existingStudentRefs.length + 1; i <= cycleCount; i++) {
                   const startIndex = (i - 1) * 5;
                   const associatedCards = studentRecords.slice(startIndex, startIndex + 5).map((c) => c.id);
-                  const latestCardDate = studentRecords[startIndex + 4]?.date || studentRecords[studentRecords.length - 1]?.date || new Date().toISOString().substring(0, 10);
+                  const latestCardDate = studentRecords[startIndex + 4]?.date || studentRecords[studentRecords.length - 1]?.date || getLocalDateString();
                   
                   referrals.push({
                     id: `recovered_${sId}_${i}_${Date.now()}`,
                     studentId: sId,
                     studentName: studentName,
                     round: `${i}차`,
-                    date: String(latestCardDate).substring(0, 10),
+                    date: normalizeDate(latestCardDate),
                     selectedCardIds: associatedCards,
                     note: `5회 누적에 따른 제${i}차 생활교육위원회 회부 (자동 복구됨)`,
                     timestamp: Date.now() - (cycleCount - i) * 1000,
@@ -372,7 +422,7 @@ export default function App() {
     setCat2('');
     setCatOther('');
     setRecordDetail('');
-    setRecordDate(new Date().toISOString().substring(0, 10));
+    setRecordDate(getLocalDateString());
     if (currentUser) {
       setRecordTeacher(currentUser.name);
     }
@@ -411,7 +461,7 @@ export default function App() {
       id: Date.now().toString(),
       studentId: selectedStudent.id,
       teacherName: teacherName,
-      date: recordDate,
+      date: normalizeDate(recordDate),
       cat1: cat1,
       cat2: cat2,
       otherDetail: catOther.trim(),
@@ -468,7 +518,7 @@ export default function App() {
       cat1: record.cat1,
       cat2: record.cat2,
       otherDetail: record.otherDetail || '',
-      date: String(record.date).substring(0, 10),
+      date: normalizeDate(record.date),
       detail: record.detail,
     });
   };
@@ -644,7 +694,7 @@ export default function App() {
       mode: 'create',
       student,
       round: roundText,
-      date: new Date().toISOString().substring(0, 10),
+      date: getLocalDateString(),
       note: `5회 누적에 따른 제${roundText} 생활교육위원회 회부`,
       selectedCardIds: initialSelectedIds,
       applyCycleReset: true,
@@ -666,7 +716,7 @@ export default function App() {
       mode: 'create',
       student: defaultStudent,
       round: roundText,
-      date: new Date().toISOString().substring(0, 10),
+      date: getLocalDateString(),
       note: '',
       selectedCardIds: [],
       applyCycleReset: false,
@@ -691,7 +741,7 @@ export default function App() {
       referralId: referral.id,
       student,
       round: referral.round,
-      date: String(referral.date).substring(0, 10),
+      date: normalizeDate(referral.date),
       note: referral.note,
       selectedCardIds: referral.selectedCardIds || [],
       applyCycleReset: referral.cycleResetApplied ?? true,
@@ -788,7 +838,7 @@ export default function App() {
           return {
             ...r,
             round: roundName,
-            date: referralModal.date || new Date().toISOString().substring(0, 10),
+            date: normalizeDate(referralModal.date),
             note: referralModal.note.trim(),
             selectedCardIds: referralModal.selectedCardIds,
             cycleResetApplied: referralModal.applyCycleReset,
@@ -816,7 +866,7 @@ export default function App() {
       studentId: student.id,
       studentName: student.name,
       round: roundName,
-      date: referralModal.date || new Date().toISOString().substring(0, 10),
+      date: normalizeDate(referralModal.date),
       selectedCardIds: referralModal.selectedCardIds,
       note: referralModal.note.trim(),
       timestamp: Date.now(),
@@ -1589,7 +1639,7 @@ export default function App() {
                                 {cardNum}
                               </span>
                               <span className="text-sm font-semibold text-slate-600">
-                                {String(r.date).substring(0, 10)}
+                                {normalizeDate(r.date)}
                               </span>
                               <span className="text-sm text-slate-400">| 지도: {r.teacherName} 선생님</span>
                             </div>
@@ -2357,7 +2407,7 @@ export default function App() {
                                     </td>
                                     <td className="px-4 py-3 text-center text-slate-500 text-sm">{s.totalCount}회</td>
                                     <td className="px-4 py-3 text-center text-slate-600 text-sm">
-                                      {String(s.latestDate).substring(0, 10)}
+                                      {s.latestDate ? normalizeDate(s.latestDate) : '-'}
                                     </td>
                                     <td className="px-4 py-3 text-center">
                                       <button
@@ -2577,7 +2627,7 @@ export default function App() {
 
                                         {/* Referral Date */}
                                         <td className="px-4 py-3.5 text-center text-slate-600 text-xs font-medium">
-                                          {String(ref.date).substring(0, 10)}
+                                          {normalizeDate(ref.date)}
                                         </td>
 
                                         {/* Note / Content */}
@@ -2994,7 +3044,7 @@ export default function App() {
                                     </button>
                                   </td>
                                   <td className="px-4 py-3 text-center font-medium text-indigo-700">
-                                    {String(r.date).substring(0, 10)}
+                                    {normalizeDate(r.date)}
                                   </td>
                                   <td className="px-4 py-3 text-center text-slate-600">{r.teacherName} 선생님</td>
                                   <td className="px-4 py-3 text-slate-700">
